@@ -128,6 +128,12 @@ jobs:
       - name: Test killswitch release interlock (real Linux processes)
         run: python3 tests/killswitch-release-interlock.py
 
+      - name: Test exact legacy NULL quarantine candidate guards (#207)
+        run: python3 tests/issue207-legacy-null-approval-test.py
+
+      - name: Test #207 fixed psql transport against CI-owned network-none PostgreSQL
+        run: python3 tests/issue207-psql-transport-test.py
+
       - name: Test image DLQ killswitch preserves video canary scope
         run: python3 tests/killswitch-image-dlq-scope.py
 

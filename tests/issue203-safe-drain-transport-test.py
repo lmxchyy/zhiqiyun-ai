@@ -504,6 +504,29 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(self.live.core.canonical(actual), self.live.core.canonical(again))
             finally:
                 cur.execute('ROLLBACK')
+        self.fixture.sql('CREATE TABLE IF NOT EXISTS public.schema_migrations(filename text PRIMARY KEY, applied_at timestamptz NOT NULL)')
+        self.fixture.sql("INSERT INTO public.schema_migrations(filename,applied_at) VALUES('119-execution-generation-fencing.sql','2026-09-18T08:20:09.578256Z') ON CONFLICT (filename) DO UPDATE SET applied_at=EXCLUDED.applied_at")
+        legacy = [dict(item, generation=None) for item in self.fixture.entries[:6]]
+        pins = frozenset(self.live.core._approval.legacy_identity_sha256(item['execution_id'], item['task_id'], item['attempt']) for item in legacy)
+        old_pins = self.live.core._approval.LEGACY_NULL_IDENTITY_PINS
+        self.live.core._approval.LEGACY_NULL_IDENTITY_PINS = pins
+        try:
+            with self.db.cursor() as native:
+                cur = ComparedCursor(native)
+                cur.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
+                try:
+                    native.execute("UPDATE public.xz_generation_tasks SET created_at='2026-09-03T10:09:43.350748981Z' WHERE id IN ('synthetic-task-0','synthetic-task-1','synthetic-task-2','synthetic-task-3','synthetic-task-4','synthetic-task-5')")
+                    native.execute('DELETE FROM public.provider_execution_correlations WHERE execution_id=800')
+                    native.execute('DELETE FROM public.provider_executions WHERE id=800')
+                    native.execute("UPDATE public.provider_executions SET task_execution_generation=NULL,created_at='2026-09-03T10:09:43Z' WHERE id BETWEEN 901 AND 906")
+                    self.assertEqual(self.live.core.canonical(
+                        self.live.core.project_canonical_live_snapshot_in_transaction(native, legacy)),
+                        self.live.core.canonical(
+                            self.live.core.project_canonical_live_snapshot_in_transaction(cur, legacy)))
+                finally:
+                    cur.execute('ROLLBACK')
+        finally:
+            self.live.core._approval.LEGACY_NULL_IDENTITY_PINS = old_pins
         self.fixture.stored_asset_fixture()
         self.manifest.write_bytes(self.fixture.signed_canonical(release_sha=self.release))
         with self.db.cursor() as native:

@@ -28,6 +28,17 @@ MAX_BYTES = 1048576
 MAX_CANDIDATE_BYTES = 32 * 1024 * 1024
 CANDIDATE_VERSION = 'quarantine-approval-candidate-v1'
 LIVE_SNAPSHOT_VERSION = 'issue203-live-canonical-snapshot-sha256-v1'
+LEGACY_GENERATION_REASON = 'pre-migration-119-generation-not-recorded'
+# Reviewed exact execution/task/attempt identities, never a wildcard for NULL rows.
+# Digest input is canonical({'attempt': int, 'execution_id': int, 'task_id': str}).
+LEGACY_NULL_IDENTITY_PINS = frozenset((
+    'bd7773cfc2090bbfe77f01ce14db52fb3bfd863f0d7a3900847fc777a562ad5d',
+    '73383748ac2cd7e1f98570f4e0113e3e7a51600b2958b68af5197f419d6ab84c',
+    '455af65b21fa4dbc5e5553d16383e1b48056b88485e5eebc54cf0939210210ce',
+    '37fcaee4ec7fabb8de0c8b9d9c88bebfea1cfb43458c9e149c33de9463bed0db',
+    'db3c5f6a38fa62f45843e82acfa81ac73806d80e4fb9d054b5d38af22479504c',
+    'bc0d9022032d930a5661f73f28b759b0b02ffadd4af8e1aaf3499702f199a7a6',
+))
 
 
 class ApprovalError(Exception):
@@ -73,6 +84,46 @@ def timestamp(value):
             tzinfo=datetime.timezone.utc)
     except ValueError:
         reject()
+
+
+def legacy_identity_sha256(execution_id, task_id, attempt):
+    if (type(execution_id) is not int or execution_id <= 0 or
+            not _text(task_id) or type(attempt) is not int or attempt <= 0):
+        reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
+    return hashlib.sha256(canonical({'attempt': attempt, 'execution_id': execution_id,
+                                     'task_id': task_id})).hexdigest()
+
+
+def legacy_identity_pinned(identity):
+    return legacy_identity_sha256(identity['execution_id'], identity['task_id'],
+                                  identity['attempt']) in LEGACY_NULL_IDENTITY_PINS
+
+
+def validate_legacy_snapshot(identity, snapshot):
+    if identity['generation'] is not None:
+        if any(key in snapshot for key in ('task_execution_generation', 'legacy_generation_unverifiable',
+                                           'generation_resolution_reason', 'generation_resolution_evidence')):
+            reject('QUARANTINE_CANDIDATE_SNAPSHOT_INVALID')
+        return
+    evidence = snapshot.get('generation_resolution_evidence')
+    if (not legacy_identity_pinned(identity) or
+            snapshot.get('task_execution_generation', False) is not None or
+            snapshot.get('legacy_generation_unverifiable') is not True or
+            snapshot.get('generation_resolution_reason') != LEGACY_GENERATION_REASON or
+            not isinstance(evidence, dict) or
+            set(evidence) != {'identity_sha256', 'migration119_applied_at',
+                              'execution_created_at', 'task_created_at'} or
+            evidence['identity_sha256'] != legacy_identity_sha256(
+                identity['execution_id'], identity['task_id'], identity['attempt'])):
+        reject('QUARANTINE_CANDIDATE_SNAPSHOT_INVALID')
+    try:
+        migration = timestamp(evidence['migration119_applied_at'])
+        execution = timestamp(evidence['execution_created_at'])
+        task = timestamp(evidence['task_created_at'])
+    except (TypeError, ApprovalError):
+        reject('QUARANTINE_CANDIDATE_SNAPSHOT_INVALID')
+    if not execution < migration or not task < migration:
+        reject('QUARANTINE_CANDIDATE_SNAPSHOT_INVALID')
 
 
 def _hex(value, size):
@@ -180,11 +231,15 @@ def build_unsigned_candidate(entries, snapshots, release_sha, key_id,
     records = []
     seen_ids, seen_attempts = set(), set()
     for item in sorted(entries, key=lambda value: value.get('execution_id', -1)):
-        if not isinstance(item, dict):
+        if (not isinstance(item, dict) or
+                set(item) != {'execution_id', 'task_id', 'attempt', 'generation', 'task_generation'}):
             reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
-        for field in ('execution_id', 'attempt', 'generation', 'task_generation'):
+        for field in ('execution_id', 'attempt', 'task_generation'):
             if type(item.get(field)) is not int or not 0 < item[field] <= 9223372036854775807:
                 reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
+        if item.get('generation') is not None and (type(item['generation']) is not int or
+                not 0 < item['generation'] <= 9223372036854775807):
+            reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
         task_id = item.get('task_id')
         identity = (task_id, item['attempt'])
         if (not _text(task_id) or item['execution_id'] in seen_ids or identity in seen_attempts):
@@ -201,6 +256,7 @@ def build_unsigned_candidate(entries, snapshots, release_sha, key_id,
                 snapshot.get('generation') != item['generation'] or
                 snapshot.get('task_generation') != item['task_generation']):
             reject('QUARANTINE_CANDIDATE_SNAPSHOT_INVALID')
+        validate_legacy_snapshot(item, snapshot)
         records.append({
             'identity': {key: item[key] for key in (
                 'execution_id', 'task_id', 'attempt', 'generation', 'task_generation')},
@@ -270,9 +326,12 @@ def unsigned_manifest_bytes(candidate, review_bindings):
         _keys(record, ['identity', 'snapshot_sha256', 'snapshot'])
         identity = record['identity']
         _keys(identity, ['execution_id', 'task_id', 'attempt', 'generation', 'task_generation'])
-        for field in ('execution_id', 'attempt', 'generation', 'task_generation'):
+        for field in ('execution_id', 'attempt', 'task_generation'):
             if type(identity[field]) is not int or not 0 < identity[field] <= 9223372036854775807:
                 reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
+        if identity['generation'] is not None and (type(identity['generation']) is not int or
+                not 0 < identity['generation'] <= 9223372036854775807):
+            reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
         snapshot = record['snapshot']
         if (not _text(identity['task_id']) or not _hex(record['snapshot_sha256'], 64) or
                 not isinstance(snapshot, dict) or
@@ -282,6 +341,7 @@ def unsigned_manifest_bytes(candidate, review_bindings):
                     ('execution_id', 'task_id', 'attempt', 'generation', 'task_generation')) or
                 hashlib.sha256(canonical(snapshot)).hexdigest() != record['snapshot_sha256']):
             reject('QUARANTINE_CANDIDATE_SNAPSHOT_INVALID')
+        validate_legacy_snapshot(identity, snapshot)
         eid = identity['execution_id']
         binding = bindings.get(eid)
         attempt_key = (identity['task_id'], identity['attempt'])
@@ -378,9 +438,14 @@ def verify(raw, release_sha, operation, now):
         _keys(item, ['execution_id', 'task_id', 'attempt', 'generation', 'task_generation',
                      'snapshot_sha256', 'evidence_sha256', 'evidence', 'approval_id',
                      'release_sha', 'not_before', 'expires_at'])
-        for field in ('execution_id', 'attempt', 'generation', 'task_generation'):
+        for field in ('execution_id', 'attempt', 'task_generation'):
             if type(item[field]) is not int or not 0 < item[field] <= 9223372036854775807:
                 reject()
+        if item['generation'] is None:
+            if not legacy_identity_pinned(item):
+                reject()
+        elif type(item['generation']) is not int or not 0 < item['generation'] <= 9223372036854775807:
+            reject()
         if not _text(item['task_id']) or not _text(item['approval_id']):
             reject()
         identity = (item['task_id'], item['attempt'])

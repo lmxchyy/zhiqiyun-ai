@@ -138,6 +138,39 @@ class ApprovalTests(unittest.TestCase):
             approval.unsigned_manifest_bytes(tampered, [
                 dict(execution_id=901, approval_id='human-review-1', review_sha256='d'*64)])
 
+    def test_issue207_signed_legacy_null_binds_only_exact_pinned_identity(self):
+        identity = dict(execution_id=901, task_id='synthetic-legacy-task', attempt=1,
+                        generation=None, task_generation=2)
+        pinned = approval.legacy_identity_sha256(901, identity['task_id'], 1)
+        previous = approval.LEGACY_NULL_IDENTITY_PINS
+        approval.LEGACY_NULL_IDENTITY_PINS = frozenset((pinned,))
+        try:
+            snapshot = dict(version=approval.LIVE_SNAPSHOT_VERSION,
+                            scope='CANONICAL_LIVE_SNAPSHOT', **identity)
+            snapshot.update(core={}, financial={}, asset_storage={},
+                            task_execution_generation=None, legacy_generation_unverifiable=True,
+                            generation_resolution_reason=approval.LEGACY_GENERATION_REASON,
+                            generation_resolution_evidence={
+                                'identity_sha256': pinned,
+                                'migration119_applied_at': '2026-09-18T08:20:09.578256Z',
+                                'execution_created_at': '2026-09-03T10:09:43.405950Z',
+                                'task_created_at': '2026-09-03T10:09:43.350748Z'})
+            candidate = approval.build_unsigned_candidate(
+                [identity], {901: snapshot}, 'b'*40, self.authority['key_id'],
+                self.manifest['not_before'], self.manifest['expires_at'], NOW)
+            manifest = approval.decode(approval.unsigned_manifest_bytes(candidate, [
+                dict(execution_id=901, approval_id='review-901', review_sha256='a'*64)]))
+            self.assertIsNone(self.verify(self.signed(manifest))['executions'][0]['generation'])
+            altered = copy.deepcopy(candidate)
+            altered['records'][0]['identity']['task_id'] = 'unlisted'
+            with self.assertRaises(approval.ApprovalError):
+                approval.unsigned_manifest_bytes(altered, [
+                    dict(execution_id=901, approval_id='review-901', review_sha256='a'*64)])
+            manifest['executions'][0]['task_id'] = 'unlisted'
+            self.rejected(self.signed(manifest))
+        finally:
+            approval.LEGACY_NULL_IDENTITY_PINS = previous
+
     def test_forged_signature_and_modified_signed_content(self):
         m = approval.decode(self.signed())
         m['signature'] = base64.b64encode(b'\0' * 384).decode('ascii')

@@ -5,6 +5,7 @@ network-none namespace of its own disposable PG and verifies an ownership token
 before resetting synthetic rows. Missing tools/runtime/DB are FAIL, never SKIP.
 """
 import copy
+import datetime
 import hashlib
 import json
 import os
@@ -470,6 +471,76 @@ class CoreOnlyPostgresTests(unittest.TestCase):
     def test_missing_selected_execution(self):
         self.sql('DELETE FROM public.provider_executions WHERE id=901')
         self.reject('EXECUTION_IDENTITY_MISMATCH')
+
+    def test_issue207_six_precise_pre119_nulls_are_unsigned_only_and_fail_closed_on_drift(self):
+        # Six disposable rows model the actual 5 unknown / 1 submitted cohort.
+        # Test-only pins never appear in production Carrier source.
+        self.sql('CREATE TABLE IF NOT EXISTS public.schema_migrations(filename text PRIMARY KEY, applied_at timestamptz NOT NULL)')
+        self.sql("INSERT INTO public.schema_migrations(filename,applied_at) VALUES('119-execution-generation-fencing.sql','2026-09-18T08:20:09.578256Z') ON CONFLICT (filename) DO UPDATE SET applied_at=EXCLUDED.applied_at")
+        # Actual six: three RELEASED modern personal reservations and three
+        # historical wallet RELEASEs without personal reservation rows.
+        for i in range(3):
+            tid, aid, uid = 'synthetic-task-%d' % i, 'synthetic-account-%d' % i, 'synthetic-user-%d' % i
+            rid, lot = 'synthetic-reservation-%d' % i, 'synthetic-lot-%d' % i
+            self.sql("UPDATE public.xz_point_accounts SET available=105,frozen=0 WHERE id=%s", (aid,))
+            self.sql("UPDATE public.xz_user_wallets SET token_balance=105,frozen_token=0 WHERE user_id=%s", (uid,))
+            self.sql("UPDATE public.xz_personal_point_lots SET available_points=105,reserved_points=0 WHERE id=%s", (lot,))
+            for table, identity in [('xz_personal_point_reservations',rid),
+                                    ('xz_personal_point_reservation_allocations','synthetic-allocation-%d' % i)]:
+                self.sql('UPDATE public.'+table+" SET reserved_points=0,released_points=5,status='RELEASED' WHERE id=%s", (identity,))
+            self.sql("INSERT INTO public.xz_personal_point_lot_movements(id,lot_id,account_id,user_id,movement_type,points,available_before,available_after,reserved_before,reserved_after,consumed_before,consumed_after,expired_before,expired_after,reversed_before,reversed_after,reservation_id,idempotency_key) VALUES(%s,%s,%s,%s,'RELEASE',5,100,105,5,0,0,0,0,0,0,0,%s,%s)",
+                     ('synthetic-release-movement-%d' % i,lot,aid,uid,rid,'release:generation:release:'+tid+':'+lot))
+            self.sql("INSERT INTO public.xz_wallet_ledger(id,account_id,user_id,task_id,reference_type,reference_id,entry_type,points,available_before,available_after,frozen_before,frozen_after,idempotency_key) VALUES(%s,%s,%s,%s,'GENERATION_TASK',%s,'RELEASE',5,100,105,5,0,%s)",
+                     ('synthetic-release-%d' % i,aid,uid,tid,tid,'personal-point:release:'+aid+':generation:release:'+tid))
+            self.sql("INSERT INTO public.xz_billing_lifecycle_events(id,task_id,user_id,event_type,billing_status,points,idempotency_key) VALUES(%s,%s,%s,'RELEASE','RELEASED',5,%s)",
+                     ('synthetic-event-%d-RELEASE' % i,tid,uid,tid+':RELEASE'))
+            self.sql("UPDATE public.xz_generation_tasks SET billing_status='RELEASED',released_points=5,params=params||'{\"billingRefunded\":true}'::jsonb WHERE id=%s", (tid,))
+        selected = (0,1,2,6,7,8)
+        self.sql("UPDATE public.xz_generation_tasks SET created_at='2026-09-03T10:09:43.350748981Z' WHERE id IN ('synthetic-task-0','synthetic-task-1','synthetic-task-2','synthetic-task-6','synthetic-task-7','synthetic-task-8')")
+        self.sql('DELETE FROM public.provider_execution_correlations WHERE execution_id=800')
+        self.sql('DELETE FROM public.provider_executions WHERE id=800')
+        self.sql("UPDATE public.provider_executions SET task_execution_generation=NULL,created_at='2026-09-03T10:09:43Z' WHERE id IN (901,902,903,907,908,909)")
+        self.sql("UPDATE public.provider_executions SET status='submitted' WHERE id=903")
+        entries = copy.deepcopy([self.entries[i] for i in selected])
+        for item in entries:
+            item['generation'] = None
+        pins = frozenset(approval_mod.legacy_identity_sha256(item['execution_id'], item['task_id'], item['attempt']) for item in entries)
+        old_core, old_approval = core._approval.LEGACY_NULL_IDENTITY_PINS, approval_mod.LEGACY_NULL_IDENTITY_PINS
+        core._approval.LEGACY_NULL_IDENTITY_PINS = pins
+        approval_mod.LEGACY_NULL_IDENTITY_PINS = pins
+        now = datetime.datetime.now(datetime.timezone.utc)
+        fmt = '%Y-%m-%dT%H:%M:%S.%fZ'
+        try:
+            candidate = core.sample_unsigned_candidate_read_only(
+                self.db, entries, 'b'*40, 'UNPROVISIONED',
+                (now-datetime.timedelta(minutes=1)).strftime(fmt),
+                (now+datetime.timedelta(hours=1)).strftime(fmt))
+            self.assertEqual(candidate['record_count'], 6)
+            self.assertEqual([r['snapshot']['legacy_generation_unverifiable'] for r in candidate['records']], [True]*6)
+            self.assertTrue(all(r['snapshot']['task_execution_generation'] is None for r in candidate['records']))
+            self.assertTrue(all(r['snapshot']['generation_resolution_reason'] == approval_mod.LEGACY_GENERATION_REASON for r in candidate['records']))
+            bindings = [dict(execution_id=item['execution_id'], approval_id='review-%d' % item['execution_id'], review_sha256='a'*64) for item in entries]
+            unsigned = approval_mod.decode(approval_mod.unsigned_manifest_bytes(candidate, bindings))
+            self.assertEqual([x['generation'] for x in unsigned['executions']], [None]*6)
+            self.assertNotIn('signature', unsigned)
+            altered = copy.deepcopy(candidate)
+            altered['records'][0]['snapshot']['generation_resolution_evidence']['migration119_applied_at'] = '2026-09-01T00:00:00.000000Z'
+            with self.assertRaises(approval_mod.ApprovalError):
+                approval_mod.unsigned_manifest_bytes(altered, bindings)
+            changed = copy.deepcopy(entries)
+            changed[0]['generation'] = 1  # Cannot invent migration backfill as execution generation.
+            with self.assertRaisesRegex(core.SnapshotError, 'EXECUTION_GENERATION_MISMATCH'):
+                core.sample_canonical_live_read_only(self.db, changed)
+            unlisted = copy.deepcopy(self.entries[3])
+            unlisted['generation'] = None
+            with self.assertRaisesRegex(core.SnapshotError, 'LEGACY_IDENTITY_NOT_PINNED'):
+                core.sample_canonical_live_read_only(self.db, [unlisted])
+            self.sql("UPDATE public.provider_executions SET created_at='2026-09-19T00:00:00Z' WHERE id=901")
+            with self.assertRaisesRegex(core.SnapshotError, 'LEGACY_MIGRATION_PROOF_INVALID'):
+                core.sample_canonical_live_read_only(self.db, entries)
+        finally:
+            core._approval.LEGACY_NULL_IDENTITY_PINS = old_core
+            approval_mod.LEGACY_NULL_IDENTITY_PINS = old_approval
 
     def test_null_required_generation_status_identity_and_channel(self):
         for table, column, value, code in [
