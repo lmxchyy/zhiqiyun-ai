@@ -322,8 +322,12 @@ QUERY_TYPES = {
     'e6fa4ee28e51c76e0c2467a87236ea15180a14b7b706136bec98269ede429894': (25, 25, 25, 25, 25, 25, 25, 25, 1700, 16, 16, 16),
     # quarantine-live-snapshot.py:_query | SELECT * FROM ( SELECT id,execution_id,kind FROM public.provider_execution_correlations WHERE execution_id=ANY(%s) ) AS bounded_projection LIMIT 10001
     'f35e8e9afc9529b7d662c5b8c8670dd19146a7cc96729b7408f70da4c9d4424d': (20, 20, 25),
-    # quarantine-live-snapshot.py:_query | SELECT * FROM ( SELECT id,task_id,attempt,task_execution_generation,status,provider,provider_channel, provider_model,capability,request_fingerprint FROM public.provider_executions
-    '46585d23f0d17b9a22637afc8a34e1dad9fef9e2f9f28f4a9f6c7bd0dfc89a1a': (20, 25, 23, 20, 25, 25, 25, 25, 25, 1042),
+    # quarantine-live-snapshot.py:_query | selected task provider executions including created_at (pre-119 proof)
+    '2ce5a25ee07bf99b7d6a73cc54572713f91d63f9553712843fa52362db12667e': (20, 25, 23, 20, 25, 25, 25, 25, 25, 1042, 1184),
+    # quarantine-live-snapshot.py:_query | exact migration ledger row, no caller-supplied timestamp
+    'd1469e6526b3aff92ae8dbd6200598cc44dfe70fd61c3589b92097a38305a5c8': (1184,),
+    # quarantine-live-snapshot.py:_query | exact task creation timestamp for legacy identity
+    '5fe84364e9f1ea0ef2e9f190aa7cabb99a513c334f2fab4aef1db2b2be304681': (25,),
     # quarantine-live-snapshot.py:_query | SELECT * FROM ( SELECT movement_type,idempotency_key,points FROM public.xz_personal_point_lot_movements WHERE reservation_id=%s ) AS bounded_projection LIMIT 10001
     'b3cbade91e87660f96ea0cedd69aaa2338fc82e4093d4383f6fa53508deaea0e': (25, 25, 20),
     # quarantine-live-snapshot.py:_query | SELECT * FROM ( SELECT table_name,column_name,udt_name,is_nullable,character_maximum_length, numeric_precision,numeric_scale FROM information_schema.columns WHERE table_schema='pub

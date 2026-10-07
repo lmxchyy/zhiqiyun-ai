@@ -398,6 +398,41 @@ def _rows(cursor, table, predicate, parameters, schema=SCHEMA):
     return sorted(projected, key=canonical)
 
 
+def _legacy_generation_evidence(cursor, item, execution_created_at):
+    """Prove a Carrier-pinned NULL row predates the fencing migration."""
+    if not _approval.legacy_identity_pinned(item):
+        block('LEGACY_IDENTITY_NOT_PINNED')
+    applied_at = _one(cursor, "SELECT applied_at FROM public.schema_migrations WHERE filename=%s",
+                      ('119-execution-generation-fencing.sql',))[0]
+    task_created_raw = _one(cursor, 'SELECT created_at FROM public.xz_generation_tasks WHERE id=%s',
+                            (item['task_id'],))[0]
+    if (not isinstance(applied_at, datetime.datetime) or applied_at.tzinfo is None or
+            not isinstance(execution_created_at, datetime.datetime) or execution_created_at.tzinfo is None or
+            not isinstance(task_created_raw, str)):
+        block('LEGACY_MIGRATION_PROOF_INVALID')
+    match = re.fullmatch(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z', task_created_raw)
+    if match is None:
+        block('LEGACY_MIGRATION_PROOF_INVALID')
+    try:
+        task_created = datetime.datetime.strptime(match.group(1), '%Y-%m-%dT%H:%M:%S').replace(
+            tzinfo=datetime.timezone.utc) + datetime.timedelta(
+                microseconds=int((match.group(2) or '').ljust(6, '0')[:6] or '0'))
+    except ValueError:
+        block('LEGACY_MIGRATION_PROOF_INVALID')
+    applied_at = applied_at.astimezone(datetime.timezone.utc)
+    execution_created_at = execution_created_at.astimezone(datetime.timezone.utc)
+    # One-second margin refuses an ambiguous nanosecond/microsecond boundary.
+    if not (execution_created_at < applied_at and
+            task_created < applied_at - datetime.timedelta(seconds=1)):
+        block('LEGACY_MIGRATION_PROOF_INVALID')
+    fmt = '%Y-%m-%dT%H:%M:%S.%fZ'
+    return {'identity_sha256': _approval.legacy_identity_sha256(
+                item['execution_id'], item['task_id'], item['attempt']),
+            'migration119_applied_at': applied_at.strftime(fmt),
+            'execution_created_at': execution_created_at.strftime(fmt),
+            'task_created_at': task_created.strftime(fmt)}
+
+
 def _entries(entries):
     if not isinstance(entries, list) or not 0 < len(entries) <= 1000:
         block('APPROVED_COUNT_INVALID')
@@ -405,11 +440,17 @@ def _entries(entries):
     for item in entries:
         if not isinstance(item, dict):
             block('IDENTITY_INVALID')
-        for key in ('execution_id', 'attempt', 'generation', 'task_generation'):
+        for key in ('execution_id', 'attempt', 'task_generation'):
             if type(item.get(key)) is not int or not 0 < item[key] <= 9223372036854775807:
                 block('IDENTITY_INVALID')
         task_id = item.get('task_id')
-        if not isinstance(task_id, str) or not 0 < len(task_id.encode('utf-8')) <= 256:
+        if (not isinstance(task_id, str) or not 0 < len(task_id.encode('utf-8')) <= 256 or
+                'generation' not in item):
+            block('IDENTITY_INVALID')
+        if item['generation'] is None:
+            if not _approval.legacy_identity_pinned(item):
+                block('LEGACY_IDENTITY_NOT_PINNED')
+        elif type(item['generation']) is not int or not 0 < item['generation'] <= 9223372036854775807:
             block('IDENTITY_INVALID')
         if re.fullmatch(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', task_id):
             block('UNSUPPORTED_LINKAGE')
@@ -463,7 +504,7 @@ FROM public.xz_generation_tasks WHERE id=%s
         # Unknown provider status remains unknown; no terminality/safety inference.
         executions = _query(cursor, """
 SELECT id,task_id,attempt,task_execution_generation,status,provider,provider_channel,
-       provider_model,capability,request_fingerprint
+       provider_model,capability,request_fingerprint,created_at
 FROM public.provider_executions WHERE task_id=%s ORDER BY id
 """, (tid,))
         if not 0 < len(executions) <= MAX_ROWS:
@@ -471,9 +512,11 @@ FROM public.provider_executions WHERE task_id=%s ORDER BY id
         seen_ids, seen_attempts = set(), set()
         selected = []
         for execution in executions:
-            eid, linked_tid, attempt, generation, state, provider, channel, provider_model, capability, fingerprint = execution
+            eid, linked_tid, attempt, generation, state, provider, channel, provider_model, capability, fingerprint, created_at = execution
             if (type(eid) is not int or eid <= 0 or linked_tid != tid or type(attempt) is not int or
-                    attempt <= 0 or type(generation) is not int or generation <= 0 or
+                    attempt <= 0 or (generation is None and
+                                     (eid != item['execution_id'] or item['generation'] is not None)) or
+                    (generation is not None and (type(generation) is not int or generation <= 0)) or
                     state not in ('prepared', 'submitting', 'submitted', 'processing', 'succeeded', 'failed', 'unknown') or
                     not provider or not channel or not provider_model or not capability or
                     not isinstance(fingerprint, str) or not re.fullmatch('[0-9a-f]{64}', fingerprint)):
@@ -490,6 +533,11 @@ FROM public.provider_executions WHERE task_id=%s ORDER BY id
             block('ATTEMPT_MISMATCH')
         if selected[0][3] != item['generation']:
             block('EXECUTION_GENERATION_MISMATCH')
+        if item['generation'] is None and (len(executions) != 1 or item['attempt'] != 1 or
+                                           selected[0][4] not in ('unknown', 'submitted')):
+            block('LEGACY_IDENTITY_AMBIGUOUS')
+        legacy_evidence = (_legacy_generation_evidence(cursor, item, selected[0][10])
+                           if item['generation'] is None else None)
         # Detect duplicate ID anywhere, including another task.
         counts = _query(cursor, 'SELECT id,count(*) FROM public.provider_executions WHERE id=ANY(%s) GROUP BY id',
                         (sorted(seen_ids),))
@@ -525,6 +573,8 @@ WHERE execution_id=ANY(%s)
             'counts': {key: len(value) for key, value in families.items()},
             'families': families,
         }
+        if legacy_evidence is not None:
+            snapshots[item['execution_id']]['legacy_generation_evidence'] = legacy_evidence
     return snapshots
 
 
@@ -1351,7 +1401,7 @@ CANONICAL_LIVE_VERSION = 'issue203-live-canonical-snapshot-sha256-v1'
 
 
 def canonical_live_snapshot(core_data, financial_data, asset_data, entry):
-    return {
+    snapshot = {
         'version': CANONICAL_LIVE_VERSION,
         'scope': 'CANONICAL_LIVE_SNAPSHOT',
         'execution_id': entry['execution_id'],
@@ -1363,6 +1413,14 @@ def canonical_live_snapshot(core_data, financial_data, asset_data, entry):
         'financial': financial_data,
         'asset_storage': asset_data,
     }
+    if entry['generation'] is None:
+        evidence = core_data.get('legacy_generation_evidence')
+        if not isinstance(evidence, dict):
+            block('LEGACY_MIGRATION_PROOF_INVALID')
+        snapshot.update(task_execution_generation=None, legacy_generation_unverifiable=True,
+                        generation_resolution_reason=_approval.LEGACY_GENERATION_REASON,
+                        generation_resolution_evidence=evidence)
+    return snapshot
 
 
 def canonical_live_snapshot_sha256(snapshot):
