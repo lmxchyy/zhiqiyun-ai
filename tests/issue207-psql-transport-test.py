@@ -28,7 +28,8 @@ def command(args, data=None, timeout=30):
     result = subprocess.run(args, input=data, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, timeout=timeout)
     if result.returncode:
-        raise RuntimeError('owned fixture command failed: ' + args[0])
+        raise RuntimeError('owned fixture command failed: ' + args[0] + ': ' +
+                           result.stderr.decode('utf-8', 'replace')[-1000:])
     return result.stdout.decode('utf-8').strip()
 
 
@@ -66,7 +67,10 @@ def main():
         target.owner = owner
         target.check()
         for _ in range(40):
-            ready = subprocess.run(['docker', 'exec', container_id, 'pg_isready', '-q', '-U', 'issue207'],
+            # The entrypoint's temporary Unix-socket server can accept requests
+            # before the named database exists; only the final TCP server counts.
+            ready = subprocess.run(['docker', 'exec', container_id, 'pg_isready', '-q',
+                                    '-h', '127.0.0.1', '-U', 'issue207', '-d', 'issue207'],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
             if ready.returncode == 0:
                 break
