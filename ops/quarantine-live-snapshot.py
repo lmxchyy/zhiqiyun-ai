@@ -514,7 +514,8 @@ FROM public.provider_executions WHERE task_id=%s ORDER BY id
         for execution in executions:
             eid, linked_tid, attempt, generation, state, provider, channel, provider_model, capability, fingerprint, created_at = execution
             if (type(eid) is not int or eid <= 0 or linked_tid != tid or type(attempt) is not int or
-                    attempt <= 0 or (generation is None and eid != item['execution_id']) or
+                    attempt <= 0 or (generation is None and
+                                     (eid != item['execution_id'] or item['generation'] is not None)) or
                     (generation is not None and (type(generation) is not int or generation <= 0)) or
                     state not in ('prepared', 'submitting', 'submitted', 'processing', 'succeeded', 'failed', 'unknown') or
                     not provider or not channel or not provider_model or not capability or
