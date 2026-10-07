@@ -103,9 +103,11 @@ INSERT INTO public.provider_executions VALUES(901,'synthetic-legacy',1,NULL,'unk
                 cursor.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
                 # The source's exact SELECT, wrapped by _query, must be on the
                 # transport whitelist and decode timestamp/null/char(64) types.
-                rows = live._query(cursor, """SELECT id,task_id,attempt,task_execution_generation,status,provider,provider_channel,
+                rows = live._query(cursor, """
+SELECT id,task_id,attempt,task_execution_generation,status,provider,provider_channel,
        provider_model,capability,request_fingerprint,created_at
-FROM public.provider_executions WHERE task_id=%s ORDER BY id""", ('synthetic-legacy',))
+FROM public.provider_executions WHERE task_id=%s ORDER BY id
+""", ('synthetic-legacy',))
                 assert len(rows) == 1 and rows[0][0] == 901 and rows[0][3] is None
                 assert rows[0][10] == datetime.datetime(2026, 9, 3, 10, 9, 43, 405950,
                                                         tzinfo=datetime.timezone.utc)
