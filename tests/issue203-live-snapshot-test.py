@@ -529,7 +529,7 @@ class CoreOnlyPostgresTests(unittest.TestCase):
                 approval_mod.unsigned_manifest_bytes(altered, bindings)
             changed = copy.deepcopy(entries)
             changed[0]['generation'] = 1  # Cannot invent migration backfill as execution generation.
-            with self.assertRaisesRegex(core.SnapshotError, 'EXECUTION_GENERATION_MISMATCH'):
+            with self.assertRaisesRegex(core.SnapshotError, 'NULL_OR_UNKNOWN_EXECUTION_STATE'):
                 core.sample_canonical_live_read_only(self.db, changed)
             unlisted = copy.deepcopy(self.entries[3])
             unlisted['generation'] = None
