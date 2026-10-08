@@ -125,7 +125,9 @@ if a[:1]==['compose']:
   for name in names:
    cfg=model['services'][name]; cid='new-'+name
    if name=='postgres': continue
-   s['containers']={k:v for k,v in s['containers'].items() if v['Config']['Labels'].get('com.docker.compose.service')!=name}
+   s['containers']={k:v for k,v in s['containers'].items() if not (
+    v['Config']['Labels'].get('com.docker.compose.project')==model['name'] and
+    v['Config']['Labels'].get('com.docker.compose.service')==name)}
    cmdline=cfg.get('command') or ['/app/xianzhi-api']
    env=dict(cfg.get('environment') or {})
    s['containers'][cid]={'Id':cid,'Image':s['images'][cfg['image']]['Id'],'Config':{'Image':cfg['image'],'Cmd':cmdline,'Entrypoint':[],'Env':[k+'='+str(v) for k,v in env.items()],'Hostname':'fixture','User':'','Labels':{'com.docker.compose.project':model['name'],'com.docker.compose.service':name}},'HostConfig':{'RestartPolicy':{'Name':cfg.get('restart','always')}},'State':{'Running':name!='migrate','Status':'exited' if name=='migrate' else 'running','ExitCode':1 if s.get('fault')=='migration' and name=='migrate' else 0,'Restarting':False,'Health':{'Status':'healthy'}},'Mounts':[]}

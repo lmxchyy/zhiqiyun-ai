@@ -222,7 +222,8 @@ class DrainTests(unittest.TestCase):
                    'ops/verify-release-runtime.py', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py',
                    'ops/quarantine-approval.py', 'ops/create-quarantine-candidate.py',
                    'ops/quarantine-approval/registry.json', 'ops/quarantine-live-snapshot.py',
-                   'ops/quarantine-psql-transport.py', 'ops/verify-image-quarantine-capability.py')
+                   'ops/quarantine-psql-transport.py', 'ops/verify-image-quarantine-capability.py',
+                   'ops/first-upgrade-cold.py', 'ops/auto_monitor_killswitch.py')
         self.assertIn('"ops/verify-safe-drain.py"', prestage)
         self.assertIn('"ops/enroll-quarantine.py"', prestage)
         self.assertIn('"ops/quarantine-approval.py"', prestage)
@@ -231,6 +232,8 @@ class DrainTests(unittest.TestCase):
         self.assertIn('"ops/quarantine-live-snapshot.py"', prestage)
         self.assertIn('"ops/quarantine-psql-transport.py"', prestage)
         self.assertIn('"ops/verify-image-quarantine-capability.py"', prestage)
+        self.assertIn('"ops/first-upgrade-cold.py"', prestage)
+        self.assertIn('"ops/auto_monitor_killswitch.py"', prestage)
         hashes = {name: 'synthetic' for name in scripts}
         exec(block, {'proof': {'deploy_scripts_hash': hashes}, 'fail': fail})
         for missing in scripts:
