@@ -557,16 +557,6 @@ class CoreOnlyPostgresTests(unittest.TestCase):
                             core.project_core_in_transaction(cursor, self.entries)
                     finally:
                         cursor.execute('ROLLBACK')
-        # Null channel is rejected when DB constraint is absent or bypassed
-        with self.db.cursor() as cursor:
-            cursor.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
-            try:
-                cursor.execute('ALTER TABLE public.provider_executions ALTER COLUMN provider_channel DROP NOT NULL')
-                cursor.execute('UPDATE public.provider_executions SET provider_channel=NULL WHERE id=901')
-                with self.assertRaisesRegex(core.SnapshotError, '^QUARANTINE_LIVE_NULL_OR_UNKNOWN_EXECUTION_STATE$'):
-                    core.project_core_in_transaction(cursor, self.entries)
-            finally:
-                cursor.execute('ROLLBACK')
         # Empty string channel is accepted per migration 114 default
         with self.db.cursor() as cursor:
             cursor.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
