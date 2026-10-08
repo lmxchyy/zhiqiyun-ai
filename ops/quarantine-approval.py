@@ -72,8 +72,8 @@ def _pairs(pairs):
     return result
 
 
-def decode(raw):
-    if not isinstance(raw, bytes) or not 0 < len(raw) <= MAX_BYTES:
+def decode(raw, max_bytes=MAX_BYTES):
+    if not isinstance(raw, bytes) or not 0 < len(raw) <= max_bytes:
         reject()
     try:
         return json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs,
@@ -228,7 +228,11 @@ def get_release_trust_key():
                     return val
         except OSError:
             pass
-    for default_path in ("/etc/zhiqiyun/release-trust.key", ".prestage/release-trust.key"):
+    for default_path in (
+        "/etc/zhiqiyun/release-trust.key",
+        "/opt/zhiqiyun-ai/.prestage/release-trust.key",
+        ".prestage/release-trust.key",
+    ):
         if os.path.isfile(default_path):
             try:
                 with open(default_path, "r", encoding="utf-8") as f:
@@ -667,7 +671,7 @@ def main(argv=None):
             sys.stderr.write("Confirmation phrase 'APPROVE' required.\n")
             return 1
         with open(args.candidate, 'rb') as f:
-            candidate = decode(f.read(MAX_CANDIDATE_BYTES + 1))
+            candidate = decode(f.read(MAX_CANDIDATE_BYTES + 1), max_bytes=MAX_CANDIDATE_BYTES)
         if candidate.get('release_sha') != args.release_sha:
             sys.stderr.write("Candidate release_sha mismatch.\n")
             return 1
