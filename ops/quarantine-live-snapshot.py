@@ -296,6 +296,22 @@ FINANCIAL_SCHEMA = {
     ],
 }
 
+ENTERPRISE_FINANCIAL_SCHEMA = {
+    'xz_tenant_wallets': [
+        ['cash_balance_cents', 'int8', 'NO', None, 64, 0],
+        ['created_at', 'timestamptz', 'NO', None, None, None],
+        ['frozen_points', 'int8', 'NO', None, 64, 0],
+        ['metadata', 'jsonb', 'NO', None, None, None],
+        ['point_balance', 'int8', 'NO', None, 64, 0],
+        ['status', 'text', 'NO', None, None, None],
+        ['tenant_id', 'text', 'NO', None, None, None],
+        ['total_bonus_units', 'int8', 'NO', None, 64, 0],
+        ['total_recharge_units', 'int8', 'NO', None, 64, 0],
+        ['updated_at', 'timestamptz', 'NO', None, None, None],
+        ['version', 'int8', 'NO', None, 64, 0],
+    ],
+}
+
 
 def _query(cursor, sql, parameters=(), limit=None):
     # Every fixed-source SELECT is client-size bounded, including discovery and
@@ -481,19 +497,28 @@ SELECT execution_generation,status,task_status,user_id,tenant_id,
        jsonb_typeof(result_ids),type,model,
        (jsonb_typeof(params)='object'
         AND (NOT (params ? 'billing_scope') OR jsonb_typeof(params->'billing_scope')='string')
-        AND upper(btrim(billing_account_type,%s)) IN ('','PERSONAL')
-        AND upper(btrim(coalesce(params->>'billing_scope',''),%s)) IN ('','PERSONAL'))
+        AND (
+          (upper(btrim(billing_account_type,%s)) IN ('','PERSONAL')
+           AND upper(btrim(coalesce(params->>'billing_scope',''),%s)) IN ('','PERSONAL')
+           AND (tenant_id IS NULL OR tenant_id IN ('','tenant_default')))
+          OR
+          (upper(btrim(billing_account_type,%s)) = 'ENTERPRISE'
+           AND upper(btrim(coalesce(params->>'billing_scope',''),%s)) = 'ENTERPRISE'
+           AND tenant_id IS NOT NULL AND tenant_id LIKE 'tenant_%%' AND tenant_id NOT IN ('','tenant_default')
+           AND (NOT (params ? 'tenant_id') OR params->>'tenant_id'=tenant_id)
+           AND (NOT (raw ? 'tenantId') OR raw->>'tenantId'=tenant_id))
+        ))
 FROM public.xz_generation_tasks WHERE id=%s
-""", (GO_TRIM_SPACE, GO_TRIM_SPACE, tid), limit=2)
+""", (GO_TRIM_SPACE, GO_TRIM_SPACE, GO_TRIM_SPACE, GO_TRIM_SPACE, tid), limit=2)
         if len(task) != 1:
             block('TASK_COUNT_MISMATCH')
-        gen, status, task_status, user, tenant, result_type, task_type, model, personal_scope = task[0]
+        gen, status, task_status, user, tenant, result_type, task_type, model, valid_scope = task[0]
         if gen != item['task_generation']:
             block('TASK_GENERATION_MISMATCH')
         # Return only the linkage predicate, never raw params. Runtime recognizes
         # enterprise in either location and rejects unknown/conflicting scopes;
         # malformed JSON types are conservatively unsupported here.
-        if (personal_scope is not True or tenant not in (None, '', 'tenant_default') or
+        if (valid_scope is not True or
                 _one(cursor, 'SELECT count(*) FROM public.generation_tasks WHERE id::text=%s', (tid,))[0]):
             block('UNSUPPORTED_LINKAGE')
         if (not user or not task_type or not model or
@@ -518,7 +543,7 @@ FROM public.provider_executions WHERE task_id=%s ORDER BY id
                                      (eid != item['execution_id'] or item['generation'] is not None)) or
                     (generation is not None and (type(generation) is not int or generation <= 0)) or
                     state not in ('prepared', 'submitting', 'submitted', 'processing', 'succeeded', 'failed', 'unknown') or
-                    not provider or not channel or not provider_model or not capability or
+                    not provider or channel is None or not isinstance(channel, str) or not provider_model or not capability or
                     not isinstance(fingerprint, str) or not re.fullmatch('[0-9a-f]{64}', fingerprint)):
                 block('NULL_OR_UNKNOWN_EXECUTION_STATE')
             if eid in seen_ids or attempt in seen_attempts:
@@ -657,21 +682,24 @@ def _financial_family(cursor, table, predicate, parameters, account_id, user_id,
 
 
 def project_core_financial_in_transaction(cursor, entries):
-    """Partial CORE + PERSONAL financial family on the SAME caller cursor.
+    """Partial CORE + FINANCIAL family on the SAME caller cursor.
 
     Repeatable-read/serializable observation, not absence locking or registration
     closure. Account-wide lots/movements/wallet history conservatively include
     shared balances and ALL historical entries, not merely each latest event.
     Legacy wallet-only requires an actual exact RESERVE proof; absence of personal
-    rows alone is NEVER proof of no effects. UUID/enterprise remain unsupported.
+    rows alone is NEVER proof of no effects.
     """
-    cores = project_core_in_transaction(cursor, entries)  # keeps personal resolver
+    cores = project_core_in_transaction(cursor, entries)
     _schema(cursor, FINANCIAL_SCHEMA)
     snapshots = {}
     for item in sorted(entries, key=lambda value: value['execution_id']):
         tid = item['task_id']
-        user, engine, marker_account, marker_reservation, task_valid = _one(cursor, """
-SELECT user_id,coalesce(raw->>'billingEngine',''),
+        user, tenant, acct_type, scope, engine, marker_account, marker_reservation, task_valid = _one(cursor, """
+SELECT user_id,coalesce(tenant_id,''),
+       upper(btrim(billing_account_type,%s)),
+       upper(btrim(coalesce(params->>'billing_scope',''),%s)),
+       coalesce(raw->>'billingEngine',''),
        coalesce(raw->>'personalPointAccountId',''),coalesce(raw->>'personalPointReservationId',''),
        (jsonb_typeof(raw)='object'
         AND NOT EXISTS (SELECT 1 FROM jsonb_each(raw) f
@@ -682,22 +710,28 @@ SELECT user_id,coalesce(raw->>'billingEngine',''),
         AND billing_status IN ('UNQUOTED','QUOTED','RESERVED','CAPTURED','RELEASED','REFUNDED','BILLING_FAILED')
         AND point_cost>0 AND point_cost<=9007199254740991 AND reserved_points>0)
 FROM public.xz_generation_tasks WHERE id=%s
-""", (tid,))
+""", (GO_TRIM_SPACE, GO_TRIM_SPACE, tid))
         if task_valid is not True:
             block('FINANCIAL_TASK_LINKAGE_INVALID')
-        modern = engine == 'PERSONAL_LOT_V1' and bool(marker_account) and bool(marker_reservation)
-        if not modern and (engine or marker_account or marker_reservation):
-            block('FINANCIAL_MARKER_INVALID')
-        accounts = _query(cursor, 'SELECT id,user_id,available,frozen FROM public.xz_point_accounts WHERE user_id=%s OR id=%s',
-                          (user, marker_account), limit=2)
-        if len(accounts) != 1 or not accounts[0][0]:
-            block('FINANCIAL_ACCOUNT_COUNT')
-        aid, owner, available, frozen = accounts[0]
-        if owner != user or (modern and aid != marker_account):
-            block('FINANCIAL_OWNER_MISMATCH')
-        if available is None or frozen is None or available < 0 or frozen < 0:
-            block('FINANCIAL_STATE_INVALID')
-        linkage = _one(cursor, """
+        is_personal = acct_type in ('', 'PERSONAL') and scope in ('', 'PERSONAL') and tenant in ('', 'tenant_default')
+        is_enterprise = acct_type == 'ENTERPRISE' and scope == 'ENTERPRISE' and tenant.startswith('tenant_') and tenant != 'tenant_default'
+        if not is_personal and not is_enterprise:
+            block('FINANCIAL_TASK_LINKAGE_INVALID')
+
+        if is_personal:
+            modern = engine == 'PERSONAL_LOT_V1' and bool(marker_account) and bool(marker_reservation)
+            if not modern and (engine or marker_account or marker_reservation):
+                block('FINANCIAL_MARKER_INVALID')
+            accounts = _query(cursor, 'SELECT id,user_id,available,frozen FROM public.xz_point_accounts WHERE user_id=%s OR id=%s',
+                              (user, marker_account), limit=2)
+            if len(accounts) != 1 or not accounts[0][0]:
+                block('FINANCIAL_ACCOUNT_COUNT')
+            aid, owner, available, frozen = accounts[0]
+            if owner != user or (modern and aid != marker_account):
+                block('FINANCIAL_OWNER_MISMATCH')
+            if available is None or frozen is None or available < 0 or frozen < 0:
+                block('FINANCIAL_STATE_INVALID')
+            linkage = _one(cursor, """
 SELECT (coalesce(billing_account_id,'') IN ('',%s)
         AND (NOT (params ? 'billing_account_id') OR
              (jsonb_typeof(params->'billing_account_id')='string' AND params->>'billing_account_id' IN ('',%s)))
@@ -705,20 +739,43 @@ SELECT (coalesce(billing_account_id,'') IN ('',%s)
              (jsonb_typeof(raw->'billingAccountId')='string' AND raw->>'billingAccountId' IN ('',%s))))
 FROM public.xz_generation_tasks WHERE id=%s
 """, (user, user, user, tid))[0]
-        if linkage is not True:
-            block('FINANCIAL_ACCOUNT_LINKAGE_INVALID')
-        wallets = _query(cursor, 'SELECT token_balance,frozen_token FROM public.xz_user_wallets WHERE user_id=%s', (user,), limit=2)
-        if len(wallets) != 1:
-            block('FINANCIAL_WALLET_COUNT')
-        if wallets[0] != (available, frozen):
-            block('FINANCIAL_BALANCE_CONFLICT')
+            if linkage is not True:
+                block('FINANCIAL_ACCOUNT_LINKAGE_INVALID')
+            wallets = _query(cursor, 'SELECT token_balance,frozen_token FROM public.xz_user_wallets WHERE user_id=%s', (user,), limit=2)
+            if len(wallets) != 1:
+                block('FINANCIAL_WALLET_COUNT')
+            if wallets[0] != (available, frozen):
+                block('FINANCIAL_BALANCE_CONFLICT')
+        else:
+            modern = False
+            if engine or marker_account or marker_reservation:
+                block('FINANCIAL_MARKER_INVALID')
+            aid = tenant
+            wallets = _query(cursor, 'SELECT tenant_id,point_balance,frozen_points,status FROM public.xz_tenant_wallets WHERE tenant_id=%s',
+                             (tenant,), limit=2)
+            if len(wallets) != 1 or wallets[0][3] != 'ACTIVE':
+                block('FINANCIAL_ACCOUNT_COUNT')
+            available, frozen = wallets[0][1], wallets[0][2]
+            if available is None or frozen is None or available < 0 or frozen < 0:
+                block('FINANCIAL_STATE_INVALID')
+            linkage = _one(cursor, """
+SELECT (coalesce(billing_account_id,'')=%s
+        AND (NOT (params ? 'billing_account_id') OR
+             (jsonb_typeof(params->'billing_account_id')='string' AND params->>'billing_account_id'=%s))
+        AND (NOT (raw ? 'billingAccountId') OR
+             (jsonb_typeof(raw->'billingAccountId')='string' AND raw->>'billingAccountId'=%s)))
+FROM public.xz_generation_tasks WHERE id=%s
+""", (tenant, tenant, tenant, tid))[0]
+            if linkage is not True:
+                block('FINANCIAL_ACCOUNT_LINKAGE_INVALID')
+
         reserve_key = 'generation:reserve:' + tid
         reservations = _query(cursor, """
 SELECT id,account_id,user_id,business_type,business_id,idempotency_key,
        requested_points,reserved_points,captured_points,released_points,expired_points
 FROM public.xz_personal_point_reservations
 WHERE id=%s OR business_id=%s OR idempotency_key=%s
-""", (marker_reservation, tid, reserve_key), limit=2)
+""", (marker_reservation if is_personal else '', tid, reserve_key), limit=2)
         if len(reservations) != (1 if modern else 0):
             block('FINANCIAL_RESERVATION_COUNT')
         rid = marker_reservation if modern else ''
@@ -740,11 +797,11 @@ SELECT id,account_id,user_id,task_id,reference_type,reference_id,entry_type,
              CASE WHEN NOT (metadata ? 'legacy_ledger_id') THEN '' ELSE ':' || btrim(metadata->>'legacy_ledger_id',%s) END,
           'personal-point:legacy-wallet:' || %s || ':' || btrim(metadata->>'legacy_ledger_id',%s) || ':' || btrim(metadata->>'legacy_ledger_id',%s))),
        (metadata ? 'legacy_ledger_id'),
-       (tenant_id IS NULL OR tenant_id IN ('','tenant_default'))
+       (CASE WHEN %s LIKE 'tenant_%%' THEN tenant_id = %s ELSE (tenant_id IS NULL OR tenant_id IN ('','tenant_default')) END)
 FROM public.xz_wallet_ledger
 WHERE task_id=%s OR reference_id=%s OR idempotency_key=ANY(%s)
 ORDER BY id COLLATE "C"
-""", (GO_TRIM_SPACE, aid, tid, GO_TRIM_SPACE, aid, GO_TRIM_SPACE, GO_TRIM_SPACE, tid, tid, keys))
+""", (GO_TRIM_SPACE, aid, tid, GO_TRIM_SPACE, aid, GO_TRIM_SPACE, GO_TRIM_SPACE, aid, aid, tid, tid, keys))
         if not 0 < len(linked) <= MAX_ROWS:
             block('FINANCIAL_LEDGER_COUNT')
         reserves = []
@@ -774,6 +831,9 @@ ORDER BY id COLLATE "C"
         if modern and (reservations[0][6] != amounts['RESERVE'] or
                        reservations[0][8] != amounts['CAPTURE'] or reservations[0][9] != amounts['RELEASE']):
             block('FINANCIAL_RESERVE_CONFLICT')
+        if is_enterprise and (amounts['RELEASE'] != amounts['RESERVE'] or amounts['CAPTURE'] != 0 or amounts['REFUND'] != 0):
+            block('FINANCIAL_SETTLEMENT_CONFLICT')
+
         # Active reservations require generationTaskExactReservationPointCost's
         # legacy params even after modern attribution. Synchronous modern capture
         # (and settled historical wallet history) has no such writer requirement.
@@ -797,111 +857,112 @@ FROM public.xz_generation_tasks WHERE id=%s
 """, (reserves[0][8], amounts['CAPTURE'], amounts['RELEASE'], amounts['REFUND'], tid))[0]
         if reserve_valid is not True:
             block('FINANCIAL_RESERVE_CONFLICT')
-        families = {
-            'account': _rows(cursor, 'xz_point_accounts', 'id=%s', (aid,), FINANCIAL_SCHEMA),
-            'wallet': _rows(cursor, 'xz_user_wallets', 'user_id=%s', (user,), FINANCIAL_SCHEMA),
-        }
-        if len(families['account']) != 1 or len(families['wallet']) != 1:
-            block('FINANCIAL_ACCOUNT_COUNT')
-        owner_predicate, owner_parameters = 'account_id=%s OR user_id=%s', (aid, user)
-        common = "id<>'' AND idempotency_key<>''"
-        reservation_states = ("reserved_points>=0 AND captured_points>=0 AND released_points>=0 AND expired_points>=0 AND "
-            "((status='RESERVED' AND reserved_points>0) OR (status='PARTIAL' AND (reserved_points>0 OR captured_points>0)) "
-            "OR (status='CAPTURED' AND captured_points>0) OR (status='RELEASED' AND released_points>0) "
-            "OR (status='EXPIRED' AND expired_points>0) OR (status='CANCELLED' AND released_points+expired_points>0))")
-        families['reservations'], rids = _financial_family(cursor, 'xz_personal_point_reservations',
-            owner_predicate + ' OR id=%s OR business_id=%s OR idempotency_key=%s', (aid,user,rid,tid,reserve_key), aid,user,
-            common + ' AND ' + reservation_states + ' AND requested_points>0 AND requested_points=reserved_points+captured_points+released_points+expired_points',
-            ['account_id,idempotency_key','account_id,business_type,business_id'])
-        families['lots'], lots = _financial_family(cursor, 'xz_personal_point_lots', owner_predicate, owner_parameters, aid,user,
-            common + " AND status IN ('ACTIVE','EXHAUSTED','EXPIRED','REVERSED','LEGACY') AND source_type IN "
-            "('REGISTRATION_GIFT','ACTIVITY_GIFT','ADMIN_GIFT','RECHARGE','MEMBERSHIP_GRANT','MEMBER_PACKAGE_GRANT','AGENT_GRANT','AGENT_JOIN_GRANT','OPERATION_CENTER_GRANT','ORDER_GRANT','COMMERCE_ORDER','UNIFIED_PAYMENT_GRANT','WECHAT_VIRTUAL_ORDER','WECHAT_VIRTUAL_COUPON','COUPON_GRANT','REFUND','RELEASE','ADJUSTMENT','ADMIN_CORRECTION','CORRECTION','LEGACY','SYSTEM_DEFAULT','REVERSAL','MANUAL')"
-            ' AND original_points>0 AND available_points>=0 AND reserved_points>=0 AND consumed_points>=0 AND expired_points>=0 AND reversed_points>=0 '
-            'AND original_points=available_points+reserved_points+consumed_points+expired_points+reversed_points '
-            "AND ((source_type='LEGACY' AND status='LEGACY' AND expires_at IS NULL AND policy_version_id IS NULL) OR (source_type<>'LEGACY' AND status<>'LEGACY')) "
-            'AND (expires_at IS NULL OR expires_at>granted_at)',
-            ['account_id,idempotency_key'])
-        lot_balances = _one(cursor, 'SELECT coalesce(sum(available_points),0),coalesce(sum(reserved_points),0) '
-                            'FROM public.xz_personal_point_lots WHERE account_id=%s AND user_id=%s', (aid,user))
-        if lot_balances != (available, frozen):
-            block('FINANCIAL_LOT_BALANCE_CONFLICT')
-        allocation_pred = owner_predicate + ' OR reservation_id=ANY(%s) OR lot_id=ANY(%s)'
-        allocation_params = (aid,user,rids,lots)
-        families['allocations'], allocations = _financial_family(cursor, 'xz_personal_point_reservation_allocations',
-            allocation_pred, allocation_params, aid,user,
-            "id<>'' AND status<>'CANCELLED' AND allocated_points>0 AND " + reservation_states +
-            ' AND allocated_points=reserved_points+captured_points+released_points+expired_points', ['reservation_id,lot_id'])
-        allocation_links = _query(cursor, 'SELECT reservation_id,lot_id FROM public.xz_personal_point_reservation_allocations WHERE ' + allocation_pred, allocation_params)
-        if any(row[0] not in rids or row[1] not in lots for row in allocation_links):
-            block('FINANCIAL_ALLOCATION_LINKAGE_INVALID')
-        if modern:
-            totals = _one(cursor, """
+        if is_personal:
+            families = {
+                'account': _rows(cursor, 'xz_point_accounts', 'id=%s', (aid,), FINANCIAL_SCHEMA),
+                'wallet': _rows(cursor, 'xz_user_wallets', 'user_id=%s', (user,), FINANCIAL_SCHEMA),
+            }
+            if len(families['account']) != 1 or len(families['wallet']) != 1:
+                block('FINANCIAL_ACCOUNT_COUNT')
+            owner_predicate, owner_parameters = 'account_id=%s OR user_id=%s', (aid, user)
+            common = "id<>'' AND idempotency_key<>''"
+            reservation_states = ("reserved_points>=0 AND captured_points>=0 AND released_points>=0 AND expired_points>=0 AND "
+                "((status='RESERVED' AND reserved_points>0) OR (status='PARTIAL' AND (reserved_points>0 OR captured_points>0)) "
+                "OR (status='CAPTURED' AND captured_points>0) OR (status='RELEASED' AND released_points>0) "
+                "OR (status='EXPIRED' AND expired_points>0) OR (status='CANCELLED' AND released_points+expired_points>0))")
+            families['reservations'], rids = _financial_family(cursor, 'xz_personal_point_reservations',
+                owner_predicate + ' OR id=%s OR business_id=%s OR idempotency_key=%s', (aid,user,rid,tid,reserve_key), aid,user,
+                common + ' AND ' + reservation_states + ' AND requested_points>0 AND requested_points=reserved_points+captured_points+released_points+expired_points',
+                ['account_id,idempotency_key','account_id,business_type,business_id'])
+            families['lots'], lots = _financial_family(cursor, 'xz_personal_point_lots', owner_predicate, owner_parameters, aid,user,
+                common + " AND status IN ('ACTIVE','EXHAUSTED','EXPIRED','REVERSED','LEGACY') AND source_type IN "
+                "('REGISTRATION_GIFT','ACTIVITY_GIFT','ADMIN_GIFT','RECHARGE','MEMBERSHIP_GRANT','MEMBER_PACKAGE_GRANT','AGENT_GRANT','AGENT_JOIN_GRANT','OPERATION_CENTER_GRANT','ORDER_GRANT','COMMERCE_ORDER','UNIFIED_PAYMENT_GRANT','WECHAT_VIRTUAL_ORDER','WECHAT_VIRTUAL_COUPON','COUPON_GRANT','REFUND','RELEASE','ADJUSTMENT','ADMIN_CORRECTION','CORRECTION','LEGACY','SYSTEM_DEFAULT','REVERSAL','MANUAL')"
+                ' AND original_points>0 AND available_points>=0 AND reserved_points>=0 AND consumed_points>=0 AND expired_points>=0 AND reversed_points>=0 '
+                'AND original_points=available_points+reserved_points+consumed_points+expired_points+reversed_points '
+                "AND ((source_type='LEGACY' AND status='LEGACY' AND expires_at IS NULL AND policy_version_id IS NULL) OR (source_type<>'LEGACY' AND status<>'LEGACY')) "
+                'AND (expires_at IS NULL OR expires_at>granted_at)',
+                ['account_id,idempotency_key'])
+            lot_balances = _one(cursor, 'SELECT coalesce(sum(available_points),0),coalesce(sum(reserved_points),0) '
+                                'FROM public.xz_personal_point_lots WHERE account_id=%s AND user_id=%s', (aid,user))
+            if lot_balances != (available, frozen):
+                block('FINANCIAL_LOT_BALANCE_CONFLICT')
+            allocation_pred = owner_predicate + ' OR reservation_id=ANY(%s) OR lot_id=ANY(%s)'
+            allocation_params = (aid,user,rids,lots)
+            families['allocations'], allocations = _financial_family(cursor, 'xz_personal_point_reservation_allocations',
+                allocation_pred, allocation_params, aid,user,
+                "id<>'' AND status<>'CANCELLED' AND allocated_points>0 AND " + reservation_states +
+                ' AND allocated_points=reserved_points+captured_points+released_points+expired_points', ['reservation_id,lot_id'])
+            allocation_links = _query(cursor, 'SELECT reservation_id,lot_id FROM public.xz_personal_point_reservation_allocations WHERE ' + allocation_pred, allocation_params)
+            if any(row[0] not in rids or row[1] not in lots for row in allocation_links):
+                block('FINANCIAL_ALLOCATION_LINKAGE_INVALID')
+            if modern:
+                totals = _one(cursor, """
 SELECT count(*),sum(allocated_points),sum(reserved_points),sum(captured_points),sum(released_points),sum(expired_points)
 FROM public.xz_personal_point_reservation_allocations WHERE reservation_id=%s
 """, (rid,))
-            if totals[0] == 0 or tuple(totals[1:]) != tuple(reservations[0][6:]):
-                block('FINANCIAL_ALLOCATION_COUNT_OR_TOTAL')
-        families['movements'], movements = _financial_family(cursor, 'xz_personal_point_lot_movements',
-            owner_predicate + ' OR reservation_id=ANY(%s) OR lot_id=ANY(%s)', (aid,user,rids,lots), aid,user,
-            common + " AND movement_type IN ('OPENING','GRANT','RESERVE','CAPTURE','RELEASE','EXPIRE','ADJUSTMENT','REVERSE') AND points>0 "
-            'AND least(available_before,available_after,reserved_before,reserved_after,consumed_before,consumed_after,expired_before,expired_after,reversed_before,reversed_after)>=0 '
-            "AND CASE WHEN movement_type='OPENING' THEN available_before=0 AND reserved_before=0 AND consumed_before=0 AND expired_before=0 AND reversed_before=0 "
-            'AND points=available_after+reserved_after+consumed_after+expired_after+reversed_after ELSE '
-            "(CASE movement_type WHEN 'ADJUSTMENT' THEN available_after IN (available_before-points,available_before+points) "
-            "WHEN 'GRANT' THEN available_after=available_before+points WHEN 'RELEASE' THEN available_after=available_before+points "
-            "WHEN 'CAPTURE' THEN available_after=available_before ELSE available_after=available_before-points END) "
-            "AND reserved_after=reserved_before+CASE movement_type WHEN 'RESERVE' THEN points WHEN 'CAPTURE' THEN -points WHEN 'RELEASE' THEN -points ELSE 0 END "
-            "AND consumed_after=consumed_before+CASE WHEN movement_type='CAPTURE' THEN points ELSE 0 END "
-            "AND expired_after=expired_before+CASE WHEN movement_type='EXPIRE' THEN points ELSE 0 END "
-            "AND reversed_after=reversed_before+CASE WHEN movement_type='REVERSE' THEN points ELSE 0 END END", ['lot_id,idempotency_key'])
-        movement_links = _query(cursor, "SELECT lot_id,reservation_id FROM public.xz_personal_point_lot_movements WHERE account_id=%s OR user_id=%s OR reservation_id=ANY(%s) OR lot_id=ANY(%s)", (aid,user,rids,lots))
-        if any(row[0] not in lots or (row[1] is not None and row[1] not in rids) for row in movement_links):
-            block('FINANCIAL_MOVEMENT_LINKAGE_INVALID')
-        task_movements = _query(cursor, """
+                if totals[0] == 0 or tuple(totals[1:]) != tuple(reservations[0][6:]):
+                    block('FINANCIAL_ALLOCATION_COUNT_OR_TOTAL')
+            families['movements'], movements = _financial_family(cursor, 'xz_personal_point_lot_movements',
+                owner_predicate + ' OR reservation_id=ANY(%s) OR lot_id=ANY(%s)', (aid,user,rids,lots), aid,user,
+                common + " AND movement_type IN ('OPENING','GRANT','RESERVE','CAPTURE','RELEASE','EXPIRE','ADJUSTMENT','REVERSE') AND points>0 "
+                'AND least(available_before,available_after,reserved_before,reserved_after,consumed_before,consumed_after,expired_before,expired_after,reversed_before,reversed_after)>=0 '
+                "AND CASE WHEN movement_type='OPENING' THEN available_before=0 AND reserved_before=0 AND consumed_before=0 AND expired_before=0 AND reversed_before=0 "
+                'AND points=available_after+reserved_after+consumed_after+expired_after+reversed_after ELSE '
+                "(CASE movement_type WHEN 'ADJUSTMENT' THEN available_after IN (available_before-points,available_before+points) "
+                "WHEN 'GRANT' THEN available_after=available_before+points WHEN 'RELEASE' THEN available_after=available_before+points "
+                "WHEN 'CAPTURE' THEN available_after=available_before ELSE available_after=available_before-points END) "
+                "AND reserved_after=reserved_before+CASE movement_type WHEN 'RESERVE' THEN points WHEN 'CAPTURE' THEN -points WHEN 'RELEASE' THEN -points ELSE 0 END "
+                "AND consumed_after=consumed_before+CASE WHEN movement_type='CAPTURE' THEN points ELSE 0 END "
+                "AND expired_after=expired_before+CASE WHEN movement_type='EXPIRE' THEN points ELSE 0 END "
+                "AND reversed_after=reversed_before+CASE WHEN movement_type='REVERSE' THEN points ELSE 0 END END", ['lot_id,idempotency_key'])
+            movement_links = _query(cursor, "SELECT lot_id,reservation_id FROM public.xz_personal_point_lot_movements WHERE account_id=%s OR user_id=%s OR reservation_id=ANY(%s) OR lot_id=ANY(%s)", (aid,user,rids,lots))
+            if any(row[0] not in lots or (row[1] is not None and row[1] not in rids) for row in movement_links):
+                block('FINANCIAL_MOVEMENT_LINKAGE_INVALID')
+            task_movements = _query(cursor, """
 SELECT movement_type,idempotency_key,points FROM public.xz_personal_point_lot_movements
 WHERE reservation_id=%s
 """, (rid,)) if modern else []
-        task_lots = [row[1] for row in _query(cursor,
-            'SELECT reservation_id,lot_id FROM public.xz_personal_point_reservation_allocations WHERE reservation_id=%s', (rid,))]
-        reserve_movements = []
-        movement_amounts = {'CAPTURE': 0, 'RELEASE': 0}
-        for kind, key, points in task_movements:
-            commands = {'RESERVE': ['reserve'], 'CAPTURE': ['capture'], 'RELEASE': ['release','durable-release']}
-            if kind in commands:
-                allowed_keys = [kind.lower() + ':generation:' + command + ':' + tid + ':' + lot
-                                for command in commands[kind] for lot in task_lots]
-                if key not in allowed_keys:
-                    block('FINANCIAL_MOVEMENT_KEY_INVALID')
-                if kind == 'RESERVE':
-                    reserve_movements.append((key,points))
+            task_lots = [row[1] for row in _query(cursor,
+                'SELECT reservation_id,lot_id FROM public.xz_personal_point_reservation_allocations WHERE reservation_id=%s', (rid,))]
+            reserve_movements = []
+            movement_amounts = {'CAPTURE': 0, 'RELEASE': 0}
+            for kind, key, points in task_movements:
+                commands = {'RESERVE': ['reserve'], 'CAPTURE': ['capture'], 'RELEASE': ['release','durable-release']}
+                if kind in commands:
+                    allowed_keys = [kind.lower() + ':generation:' + command + ':' + tid + ':' + lot
+                                    for command in commands[kind] for lot in task_lots]
+                    if key not in allowed_keys:
+                        block('FINANCIAL_MOVEMENT_KEY_INVALID')
+                    if kind == 'RESERVE':
+                        reserve_movements.append((key,points))
+                    else:
+                        movement_amounts[kind] += points
+                elif kind == 'EXPIRE':
+                    allowed_keys = ['expire:' + lot + ':' + rid + ':generation:' + command + ':' + tid
+                                    for lot in task_lots for command in ('release','durable-release')]
+                    if key not in allowed_keys:
+                        block('FINANCIAL_MOVEMENT_KEY_INVALID')
                 else:
-                    movement_amounts[kind] += points
-            elif kind == 'EXPIRE':
-                allowed_keys = ['expire:' + lot + ':' + rid + ':generation:' + command + ':' + tid
-                                for lot in task_lots for command in ('release','durable-release')]
-                if key not in allowed_keys:
-                    block('FINANCIAL_MOVEMENT_KEY_INVALID')
-            else:
-                block('FINANCIAL_MOVEMENT_STATE_INVALID')
-        # Migration105/JSON legacy attribution writes allocations but deliberately
-        # no economic RESERVE movement. Its legacy wallet proof is mandatory above.
-        normal_reserve = reserves[0][7] == 'personal-point:reserve:' + aid + ':' + reserve_key
-        if modern and normal_reserve and (len(reserve_movements) != len(task_lots) or
-                                         sum(row[1] for row in reserve_movements) != reservations[0][6]):
-            block('FINANCIAL_MOVEMENT_COUNT_OR_TOTAL')
-        if modern and any(movement_amounts[kind] != amounts[kind] for kind in movement_amounts):
-            block('FINANCIAL_MOVEMENT_COUNT_OR_TOTAL')
-        families['ledger'], ledger_ids = _financial_family(cursor, 'xz_wallet_ledger',
-            owner_predicate + ' OR task_id=%s OR reference_id=%s OR idempotency_key=ANY(%s)', (aid,user,tid,tid,keys), aid,user,
-            common + " AND entry_type IN ('RECHARGE','GRANT','RESERVE','CAPTURE','RELEASE','REFUND','ADJUSTMENT','EXPIRE') AND points>=0 "
-            "AND available_before>=0 AND available_after>=0 AND frozen_before>=0 AND frozen_after>=0 "
-            "AND CASE entry_type WHEN 'RESERVE' THEN available_after=available_before-points AND frozen_after=frozen_before+points "
-            "WHEN 'CAPTURE' THEN available_after=available_before AND frozen_after=frozen_before-points "
-            "WHEN 'RELEASE' THEN available_after=available_before+points AND frozen_after=frozen_before-points "
-            "WHEN 'EXPIRE' THEN available_after=available_before-points AND frozen_after=frozen_before "
-            "WHEN 'ADJUSTMENT' THEN available_after IN (available_before-points,available_before+points) AND frozen_after=frozen_before "
-            "ELSE available_after=available_before+points AND frozen_after=frozen_before END", ['idempotency_key'])
-        events = _query(cursor, """
+                    block('FINANCIAL_MOVEMENT_STATE_INVALID')
+            # Migration105/JSON legacy attribution writes allocations but deliberately
+            # no economic RESERVE movement. Its legacy wallet proof is mandatory above.
+            normal_reserve = reserves[0][7] == 'personal-point:reserve:' + aid + ':' + reserve_key
+            if modern and normal_reserve and (len(reserve_movements) != len(task_lots) or
+                                             sum(row[1] for row in reserve_movements) != reservations[0][6]):
+                block('FINANCIAL_MOVEMENT_COUNT_OR_TOTAL')
+            if modern and any(movement_amounts[kind] != amounts[kind] for kind in movement_amounts):
+                block('FINANCIAL_MOVEMENT_COUNT_OR_TOTAL')
+            families['ledger'], ledger_ids = _financial_family(cursor, 'xz_wallet_ledger',
+                owner_predicate + ' OR task_id=%s OR reference_id=%s OR idempotency_key=ANY(%s)', (aid,user,tid,tid,keys), aid,user,
+                common + " AND entry_type IN ('RECHARGE','GRANT','RESERVE','CAPTURE','RELEASE','REFUND','ADJUSTMENT','EXPIRE') AND points>=0 "
+                "AND available_before>=0 AND available_after>=0 AND frozen_before>=0 AND frozen_after>=0 "
+                "AND CASE entry_type WHEN 'RESERVE' THEN available_after=available_before-points AND frozen_after=frozen_before+points "
+                "WHEN 'CAPTURE' THEN available_after=available_before AND frozen_after=frozen_before-points "
+                "WHEN 'RELEASE' THEN available_after=available_before+points AND frozen_after=frozen_before-points "
+                "WHEN 'EXPIRE' THEN available_after=available_before-points AND frozen_after=frozen_before "
+                "WHEN 'ADJUSTMENT' THEN available_after IN (available_before-points,available_before+points) AND frozen_after=frozen_before "
+                "ELSE available_after=available_before+points AND frozen_after=frozen_before END", ['idempotency_key'])
+            events = _query(cursor, """
 SELECT id,(user_id=%s AND (tenant_id IS NULL OR tenant_id IN ('','tenant_default'))
            AND task_id=%s AND idempotency_key=task_id || ':' || event_type
            AND event_type IN ('QUOTE','RESERVE','CAPTURE','RELEASE','REFUND','BILLING_FAILED')
@@ -909,20 +970,20 @@ SELECT id,(user_id=%s AND (tenant_id IS NULL OR tenant_id IN ('','tenant_default
              WHEN 'CAPTURE' THEN 'CAPTURED' WHEN 'RELEASE' THEN 'RELEASED' WHEN 'REFUND' THEN 'REFUNDED' ELSE 'BILLING_FAILED' END)
 FROM public.xz_billing_lifecycle_events WHERE task_id=%s OR idempotency_key=ANY(%s)
 """, (user,tid,tid,[tid+':'+kind for kind in ('QUOTE','RESERVE','CAPTURE','RELEASE','REFUND','BILLING_FAILED')]))
-        if any(not row[0] or row[1] is not True for row in events):
-            block('FINANCIAL_EVENT_LINKAGE_INVALID')
-        event_ids = [row[0] for row in events]
-        counts = _query(cursor, 'SELECT id,count(*) FROM public.xz_billing_lifecycle_events WHERE id=ANY(%s) GROUP BY id', (event_ids,))
-        if len(counts) != len(event_ids) or any(row[1] != 1 for row in counts):
-            block('FINANCIAL_DUPLICATE_IDENTITY')
-        if _query(cursor, 'SELECT count(*) FROM public.xz_billing_lifecycle_events WHERE idempotency_key IN (SELECT idempotency_key FROM public.xz_billing_lifecycle_events WHERE id=ANY(%s)) GROUP BY idempotency_key HAVING count(*)<>1', (event_ids,)):
-            block('FINANCIAL_DUPLICATE_KEY')
-        families['billing_lifecycle_events'] = _rows(cursor, 'xz_billing_lifecycle_events', 'id=ANY(%s)', (event_ids,), FINANCIAL_SCHEMA)
-        if len(families['billing_lifecycle_events']) != len(events):
-            block('AMBIGUOUS_COUNT')
-        history_predicate = "task_id=%s OR raw->>'taskId'=%s OR id IN (SELECT billing_event_id FROM public.xz_wallet_ledger WHERE task_id=%s)"
-        history_params = (tid,tid,tid)
-        history = _query(cursor, """
+            if any(not row[0] or row[1] is not True for row in events):
+                block('FINANCIAL_EVENT_LINKAGE_INVALID')
+            event_ids = [row[0] for row in events]
+            counts = _query(cursor, 'SELECT id,count(*) FROM public.xz_billing_lifecycle_events WHERE id=ANY(%s) GROUP BY id', (event_ids,))
+            if len(counts) != len(event_ids) or any(row[1] != 1 for row in counts):
+                block('FINANCIAL_DUPLICATE_IDENTITY')
+            if _query(cursor, 'SELECT count(*) FROM public.xz_billing_lifecycle_events WHERE idempotency_key IN (SELECT idempotency_key FROM public.xz_billing_lifecycle_events WHERE id=ANY(%s)) GROUP BY idempotency_key HAVING count(*)<>1', (event_ids,)):
+                block('FINANCIAL_DUPLICATE_KEY')
+            families['billing_lifecycle_events'] = _rows(cursor, 'xz_billing_lifecycle_events', 'id=ANY(%s)', (event_ids,), FINANCIAL_SCHEMA)
+            if len(families['billing_lifecycle_events']) != len(events):
+                block('AMBIGUOUS_COUNT')
+            history_predicate = "task_id=%s OR raw->>'taskId'=%s OR id IN (SELECT billing_event_id FROM public.xz_wallet_ledger WHERE task_id=%s)"
+            history_params = (tid,tid,tid)
+            history = _query(cursor, """
 SELECT id,(user_id=%s AND task_id=%s
     AND (tenant_id IS NULL OR tenant_id IN ('','tenant_default'))
     AND jsonb_typeof(raw)='object'
@@ -930,28 +991,57 @@ SELECT id,(user_id=%s AND task_id=%s
     AND (NOT (raw ? 'taskId') OR raw->>'taskId'=task_id)
     AND (NOT (raw ? 'userId') OR raw->>'userId'=user_id))
 FROM public.xz_billing_events WHERE """ + history_predicate, (user,tid)+history_params)
-        history_ids = [row[0] for row in history]
-        if any(not row[0] or row[1] is not True for row in history):
-            block('FINANCIAL_HISTORY_LINKAGE_INVALID')
-        counts = _query(cursor, 'SELECT id,count(*) FROM public.xz_billing_events WHERE id=ANY(%s) GROUP BY id', (history_ids,))
-        if len(counts) != len(history_ids) or any(row[1]!=1 for row in counts):
-            block('FINANCIAL_DUPLICATE_IDENTITY')
-        if _query(cursor, "SELECT count(*) FROM public.xz_billing_events WHERE transaction_id IN (SELECT transaction_id FROM public.xz_billing_events WHERE id=ANY(%s)) AND transaction_id<>'' GROUP BY transaction_id HAVING count(*)<>1", (history_ids,)):
-            block('FINANCIAL_DUPLICATE_KEY')
-        families['billing_history'] = _rows(cursor, 'xz_billing_events', history_predicate, history_params, FINANCIAL_SCHEMA)
-        if len(families['billing_history']) != len(history):
-            block('AMBIGUOUS_COUNT')
-        financial = {'version': FINANCIAL_VERSION, 'scope': 'PERSONAL_FINANCIAL_ONLY',
-                     'schema': FINANCIAL_SCHEMA, 'path': 'PERSONAL_LOT_V1' if modern else 'LEGACY_WALLET_ONLY',
-                     'counts': {key: len(value) for key,value in families.items()}, 'families': families}
-        snapshots[item['execution_id']] = {'version': PARTIAL_VERSION, 'scope': 'CORE_PERSONAL_FINANCIAL_ONLY',
-                                          'core': cores[item['execution_id']], 'financial': financial}
+            history_ids = [row[0] for row in history]
+            if any(not row[0] or row[1] is not True for row in history):
+                block('FINANCIAL_HISTORY_LINKAGE_INVALID')
+            counts = _query(cursor, 'SELECT id,count(*) FROM public.xz_billing_events WHERE id=ANY(%s) GROUP BY id', (history_ids,))
+            if len(counts) != len(history_ids) or any(row[1]!=1 for row in counts):
+                block('FINANCIAL_DUPLICATE_IDENTITY')
+            if _query(cursor, "SELECT count(*) FROM public.xz_billing_events WHERE transaction_id IN (SELECT transaction_id FROM public.xz_billing_events WHERE id=ANY(%s)) AND transaction_id<>'' GROUP BY transaction_id HAVING count(*)<>1", (history_ids,)):
+                block('FINANCIAL_DUPLICATE_KEY')
+            families['billing_history'] = _rows(cursor, 'xz_billing_events', history_predicate, history_params, FINANCIAL_SCHEMA)
+            if len(families['billing_history']) != len(history):
+                block('AMBIGUOUS_COUNT')
+            financial = {'version': FINANCIAL_VERSION, 'scope': 'PERSONAL_FINANCIAL_ONLY',
+                         'schema': FINANCIAL_SCHEMA, 'path': 'PERSONAL_LOT_V1' if modern else 'LEGACY_WALLET_ONLY',
+                         'counts': {key: len(value) for key,value in families.items()}, 'families': families}
+            snapshots[item['execution_id']] = {'version': PARTIAL_VERSION, 'scope': 'CORE_PERSONAL_FINANCIAL_ONLY',
+                                              'core': cores[item['execution_id']], 'financial': financial}
+        else:
+            _schema(cursor, ENTERPRISE_FINANCIAL_SCHEMA)
+            families = {
+                'tenant_wallet': _rows(cursor, 'xz_tenant_wallets', 'tenant_id=%s', (tenant,), ENTERPRISE_FINANCIAL_SCHEMA),
+                'ledger': _rows(cursor, 'xz_wallet_ledger', 'task_id=%s', (tid,), FINANCIAL_SCHEMA),
+                'billing_lifecycle_events': _rows(cursor, 'xz_billing_lifecycle_events', 'task_id=%s', (tid,), FINANCIAL_SCHEMA),
+            }
+            if len(families['tenant_wallet']) != 1:
+                block('FINANCIAL_ACCOUNT_COUNT')
+            events = _query(cursor, """
+SELECT id,(user_id=%s AND tenant_id=%s
+           AND task_id=%s AND idempotency_key=task_id || ':' || event_type
+           AND event_type IN ('QUOTE','RESERVE','RELEASE')
+           AND billing_status=CASE event_type WHEN 'QUOTE' THEN 'QUOTED' WHEN 'RESERVE' THEN 'RESERVED'
+             WHEN 'RELEASE' THEN 'RELEASED' END)
+FROM public.xz_billing_lifecycle_events WHERE task_id=%s OR idempotency_key=ANY(%s)
+""", (user, tenant, tid, tid, [tid+':'+kind for kind in ('QUOTE','RESERVE','RELEASE')]))
+            if len(events) != 3 or any(not row[0] or row[1] is not True for row in events):
+                block('FINANCIAL_EVENT_LINKAGE_INVALID')
+            financial = {
+                'version': FINANCIAL_VERSION, 'scope': 'ENTERPRISE_FINANCIAL_ONLY',
+                'schema': FINANCIAL_SCHEMA, 'path': 'ENTERPRISE_WALLET_ONLY',
+                'counts': {key: len(value) for key, value in families.items()},
+                'families': families
+            }
+            snapshots[item['execution_id']] = {
+                'version': PARTIAL_VERSION, 'scope': 'CORE_ENTERPRISE_FINANCIAL_ONLY',
+                'core': cores[item['execution_id']], 'financial': financial
+            }
     return snapshots
 
 
 def core_financial_sha256(snapshot):
     """Scoped partial digest, NEVER the approved final snapshot_sha256."""
-    if not isinstance(snapshot, dict) or snapshot.get('version') != PARTIAL_VERSION or snapshot.get('scope') != 'CORE_PERSONAL_FINANCIAL_ONLY':
+    if not isinstance(snapshot, dict) or snapshot.get('version') != PARTIAL_VERSION or snapshot.get('scope') not in ('CORE_PERSONAL_FINANCIAL_ONLY', 'CORE_ENTERPRISE_FINANCIAL_ONLY'):
         block('PARTIAL_SCOPE_INVALID')
     return hashlib.sha256(canonical(snapshot)).hexdigest()
 

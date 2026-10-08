@@ -328,6 +328,24 @@ QUERY_TYPES = {
     'd1469e6526b3aff92ae8dbd6200598cc44dfe70fd61c3589b92097a38305a5c8': (1184,),
     # quarantine-live-snapshot.py:_query | exact task creation timestamp for legacy identity
     '5fe84364e9f1ea0ef2e9f190aa7cabb99a513c334f2fab4aef1db2b2be304681': (25,),
+    # quarantine-live-snapshot.py:_query | core task linkage supporting personal and enterprise scopes
+    '5e63145a0a7352656cbcce808e6842ada66052cb64f32373bf96f9a094c83c4d': (20, 25, 25, 25, 25, 25, 25, 25, 16),
+    # quarantine-live-snapshot.py:_query | financial task linkage supporting personal and enterprise scopes
+    'cd010041aae5aeb99f172ab3c348e686cb3163d68059c673b8a1a218d5b40012': (25, 25, 25, 25, 25, 25, 25, 16),
+    # quarantine-live-snapshot.py:_query | enterprise tenant wallet query
+    '5a4a967a89493b11c336af1b369f183645fc92af499ad05d45151b0d5f3d28b0': (25, 20, 20, 25),
+    # quarantine-live-snapshot.py:_query | enterprise task account linkage
+    '9e97f5930bc9769f4c0535cbc7e38119827f61777cdf47ea4faf8a333aa88267': (16,),
+    # quarantine-live-snapshot.py:_query | wallet ledger query supporting personal and enterprise scopes
+    'b7b64c6adfe4a4c0202efacf85fbeae3528722fcda80090a155b9f65ee7045d0': (25, 25, 25, 25, 25, 25, 25, 25, 1700, 16, 16, 16),
+    # quarantine-live-snapshot.py:_query | enterprise tenant wallet family rows
+    '2f4e2a4b8238a5b55746e24c05d615d4a15e42b832b12d58f078438797ab5364': (25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25),
+    # quarantine-live-snapshot.py:_query | enterprise wallet ledger family rows
+    'a093d2ad2a92d15d2d4f8f7bd07a2018d525266be79fddfba4e97f86cefe8a6b': (25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25),
+    # quarantine-live-snapshot.py:_query | enterprise billing lifecycle events family rows
+    '30a880180c7650b4135e9faebfa54cd1b408b7ebf3285baa5bb8f90c574eb00a': (25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25),
+    # quarantine-live-snapshot.py:_query | enterprise billing lifecycle events verification
+    '1764cc64cb2875617af0f4fbe75e68a2c8474b4751a06c39a71aee22e216f99e': (25, 16),
     # quarantine-live-snapshot.py:_query | SELECT * FROM ( SELECT movement_type,idempotency_key,points FROM public.xz_personal_point_lot_movements WHERE reservation_id=%s ) AS bounded_projection LIMIT 10001
     'b3cbade91e87660f96ea0cedd69aaa2338fc82e4093d4383f6fa53508deaea0e': (25, 25, 20),
     # quarantine-live-snapshot.py:_query | SELECT * FROM ( SELECT table_name,column_name,udt_name,is_nullable,character_maximum_length, numeric_precision,numeric_scale FROM information_schema.columns WHERE table_schema='pub

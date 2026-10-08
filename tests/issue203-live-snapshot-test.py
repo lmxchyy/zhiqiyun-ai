@@ -545,7 +545,6 @@ class CoreOnlyPostgresTests(unittest.TestCase):
     def test_null_required_generation_status_identity_and_channel(self):
         for table, column, value, code in [
             ('provider_executions', 'task_execution_generation', None, 'NULL_OR_UNKNOWN_EXECUTION_STATE'),
-            ('provider_executions', 'provider_channel', '', 'NULL_OR_UNKNOWN_EXECUTION_STATE'),
             ('xz_generation_tasks', 'status', None, 'NULL_OR_UNKNOWN_TASK_STATE'),
             ('xz_generation_tasks', 'user_id', None, 'NULL_OR_UNKNOWN_TASK_STATE'),
         ]:
@@ -558,6 +557,14 @@ class CoreOnlyPostgresTests(unittest.TestCase):
                             core.project_core_in_transaction(cursor, self.entries)
                     finally:
                         cursor.execute('ROLLBACK')
+        # Empty string channel is accepted per migration 114 default
+        with self.db.cursor() as cursor:
+            cursor.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
+            try:
+                cursor.execute("UPDATE public.provider_executions SET provider_channel='' WHERE id=901")
+                core.project_core_in_transaction(cursor, self.entries)
+            finally:
+                cursor.execute('ROLLBACK')
 
     def test_missing_changed_extra_schema_columns(self):
         self.schema_reject('ALTER TABLE public.xz_generation_tasks DROP COLUMN prompt', 'SCHEMA_MISMATCH')
@@ -628,6 +635,16 @@ class CoreOnlyPostgresTests(unittest.TestCase):
         self.reject('UNSUPPORTED_LINKAGE', changed)
         self.sql("UPDATE public.xz_generation_tasks SET billing_account_type='ENTERPRISE' WHERE id='synthetic-task-0'")
         self.reject('UNSUPPORTED_LINKAGE')
+
+    def test_supported_enterprise_tenant_core_projection(self):
+        # Valid enterprise tenant linkage is supported at core projection
+        self.sql("UPDATE public.xz_generation_tasks SET tenant_id='tenant_test_123',billing_account_type='ENTERPRISE',params=params||'{\"billing_scope\":\"ENTERPRISE\",\"tenant_id\":\"tenant_test_123\"}'::jsonb,raw=raw||'{\"tenantId\":\"tenant_test_123\"}'::jsonb WHERE id='synthetic-task-0'")
+        with self.db.cursor() as cursor:
+            cursor.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
+            try:
+                core.project_core_in_transaction(cursor, self.entries)
+            finally:
+                cursor.execute('ROLLBACK')
 
     def test_params_billing_scope_rejected_at_core_projection(self):
         cases = [

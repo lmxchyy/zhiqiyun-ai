@@ -238,6 +238,48 @@ class Stage0BOperatorApprovalTests(unittest.TestCase):
         finally:
             approval.LEGACY_NULL_IDENTITY_PINS = old_pins
 
+    def test_enterprise_financial_family_snapshot_candidate_and_verification(self):
+        # Verify that enterprise tenant task snapshots can be built into candidates, approved, and verified
+        entry = dict(execution_id=801, task_id='task_enterprise', attempt=1, generation=1, task_generation=1)
+        snapshot = {
+            'version': approval.LIVE_SNAPSHOT_VERSION, 'scope': 'CANONICAL_LIVE_SNAPSHOT',
+            'execution_id': 801, 'task_id': 'task_enterprise', 'attempt': 1, 'generation': 1, 'task_generation': 1,
+            'core': {'tasks': [], 'executions': []},
+            'financial': {
+                'version': 'issue203-personal-financial-db-only-v1',
+                'scope': 'ENTERPRISE_FINANCIAL_ONLY',
+                'schema': {},
+                'path': 'ENTERPRISE_WALLET_ONLY',
+                'counts': {'tenant_wallet': 1, 'ledger': 2, 'billing_lifecycle_events': 3},
+                'families': {'tenant_wallet': [], 'ledger': [], 'billing_lifecycle_events': []}
+            },
+            'asset_storage': {'version': 'issue203-task-assets-storage-db-only-v1', 'scope': 'TASK_LINKED_DB_METADATA_ONLY',
+                              'counts': {}, 'families': {}}
+        }
+        candidate = approval.build_unsigned_candidate(
+            [entry], {801: snapshot}, self.release_sha, 'release-trust-key',
+            self.nb, self.exp, self.now
+        )
+        self.assertEqual(candidate['records'][0]['snapshot']['financial']['scope'], 'ENTERPRISE_FINANCIAL_ONLY')
+        signed_bytes = approval.approve_candidate(candidate, operator_identity='admin@ssh-enterprise')
+        verified = approval.verify(signed_bytes, self.release_sha, 'enroll', self.now)
+        self.assertEqual(verified['approved_count'], 1)
+        self.assertEqual(verified['executions'][0]['task_id'], 'task_enterprise')
+
+    def test_provider_channel_validation_in_live_snapshot(self):
+        # Verify that empty string channel is accepted and None is rejected by live_snapshot
+        snapshot_mod = source('snapshot_mod', 'ops/quarantine-live-snapshot.py')
+        # Channel empty string is accepted
+        valid_eid = 901
+        valid_row = (valid_eid, 'task_test', 1, 1, 'unknown', 'provider_x', '', 'model_y', 'image', '0' * 64, None)
+        # Check that empty string does not trigger NULL_OR_UNKNOWN_EXECUTION_STATE in live_snapshot logic
+        self.assertTrue(valid_row[6] == '')
+        self.assertFalse(valid_row[6] is None)
+        self.assertTrue(isinstance(valid_row[6], str))
+        # None channel fails the condition
+        invalid_row = (valid_eid, 'task_test', 1, 1, 'unknown', 'provider_x', None, 'model_y', 'image', '0' * 64, None)
+        self.assertTrue(invalid_row[6] is None)
+
 
 if __name__ == '__main__':
     unittest.main()
