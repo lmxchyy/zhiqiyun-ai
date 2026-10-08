@@ -202,7 +202,9 @@ acquire_release_lock() {
   fail "CONCURRENCY_LOCKED: Another release process currently holds the lock."
 }
 
-[ ! -e "${PRESTAGE_DIR}/cold-recovery-required" ] && [ ! -L "${PRESTAGE_DIR}/cold-recovery-required" ] || fail "COLD_RECOVERY_REQUIRED: separate human authorization required; no prestage."
+if [ -e "${PRESTAGE_DIR}/cold-recovery-required" ] || [ -L "${PRESTAGE_DIR}/cold-recovery-required" ]; then
+  fail "COLD_RECOVERY_REQUIRED: separate human authorization required; no prestage."
+fi
 acquire_release_lock
 export FIRST_UPGRADE_COLD
 

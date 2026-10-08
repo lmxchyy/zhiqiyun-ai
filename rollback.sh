@@ -803,7 +803,9 @@ if [ -n "$ROLLBACK_RECEIPT" ]; then
 fi
 
 if [ "$FIRST_UPGRADE_COLD" = "1" ]; then
-  [ -n "$ROLLBACK_RECEIPT" ] && [ -n "$PRESTAGE_PROOF_FILE" ] || fail "COLD_POLICY_REQUIRED: actual receipt and signed Proof required."
+  if [ -z "$ROLLBACK_RECEIPT" ] || [ -z "$PRESTAGE_PROOF_FILE" ]; then
+    fail "COLD_POLICY_REQUIRED: actual receipt and signed Proof required."
+  fi
   # Arm validates target capability, protected bytes, official exact unsupported
   # rollback identity and signed no-restart policy. This branch NEVER runs SQL.
   COLD_ARMED=1

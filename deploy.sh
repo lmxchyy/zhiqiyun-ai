@@ -347,7 +347,9 @@ fail(f"Health and readiness verification timed out after {max_wait_seconds}s. La
 PY
 }
 
-[ ! -e "${PRESTAGE_DIR}/cold-recovery-required" ] && [ ! -L "${PRESTAGE_DIR}/cold-recovery-required" ] || fail "COLD_RECOVERY_REQUIRED: separate human authorization required; no deployment."
+if [ -e "${PRESTAGE_DIR}/cold-recovery-required" ] || [ -L "${PRESTAGE_DIR}/cold-recovery-required" ]; then
+  fail "COLD_RECOVERY_REQUIRED: separate human authorization required; no deployment."
+fi
 [ "$FIRST_UPGRADE_COLD" != "1" ] || [ "$PRESTAGED_RELEASE" = "1" ] || fail "COLD_POLICY_REQUIRED: --first-upgrade-cold requires signed prestaged release."
 
 command -v git >/dev/null 2>&1 || fail "git is not installed."
