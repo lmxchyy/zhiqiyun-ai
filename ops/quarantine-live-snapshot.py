@@ -264,19 +264,6 @@ FINANCIAL_SCHEMA = {
         ['raw', 'jsonb', 'NO', None, None, None],
         ['user_id', 'text', 'YES', None, None, None],
     ],
-    'xz_tenant_wallets': [
-        ['cash_balance_cents', 'int8', 'NO', None, 64, 0],
-        ['created_at', 'timestamptz', 'NO', None, None, None],
-        ['frozen_points', 'int8', 'NO', None, 64, 0],
-        ['metadata', 'jsonb', 'NO', None, None, None],
-        ['point_balance', 'int8', 'NO', None, 64, 0],
-        ['status', 'text', 'NO', None, None, None],
-        ['tenant_id', 'text', 'NO', None, None, None],
-        ['total_bonus_units', 'int8', 'NO', None, 64, 0],
-        ['total_recharge_units', 'int8', 'NO', None, 64, 0],
-        ['updated_at', 'timestamptz', 'NO', None, None, None],
-        ['version', 'int8', 'NO', None, 64, 0],
-    ],
     'xz_user_wallets': [
         ['cash_balance_cents', 'int8', 'NO', None, 64, 0],
         ['frozen_token', 'int8', 'NO', None, 64, 0],
@@ -306,6 +293,22 @@ FINANCIAL_SCHEMA = {
         ['task_id', 'text', 'YES', None, None, None],
         ['tenant_id', 'text', 'YES', None, None, None],
         ['user_id', 'text', 'YES', None, None, None],
+    ],
+}
+
+ENTERPRISE_FINANCIAL_SCHEMA = {
+    'xz_tenant_wallets': [
+        ['cash_balance_cents', 'int8', 'NO', None, 64, 0],
+        ['created_at', 'timestamptz', 'NO', None, None, None],
+        ['frozen_points', 'int8', 'NO', None, 64, 0],
+        ['metadata', 'jsonb', 'NO', None, None, None],
+        ['point_balance', 'int8', 'NO', None, 64, 0],
+        ['status', 'text', 'NO', None, None, None],
+        ['tenant_id', 'text', 'NO', None, None, None],
+        ['total_bonus_units', 'int8', 'NO', None, 64, 0],
+        ['total_recharge_units', 'int8', 'NO', None, 64, 0],
+        ['updated_at', 'timestamptz', 'NO', None, None, None],
+        ['version', 'int8', 'NO', None, 64, 0],
     ],
 }
 
@@ -1005,8 +1008,9 @@ FROM public.xz_billing_events WHERE """ + history_predicate, (user,tid)+history_
             snapshots[item['execution_id']] = {'version': PARTIAL_VERSION, 'scope': 'CORE_PERSONAL_FINANCIAL_ONLY',
                                               'core': cores[item['execution_id']], 'financial': financial}
         else:
+            _schema(cursor, ENTERPRISE_FINANCIAL_SCHEMA)
             families = {
-                'tenant_wallet': _rows(cursor, 'xz_tenant_wallets', 'tenant_id=%s', (tenant,), FINANCIAL_SCHEMA),
+                'tenant_wallet': _rows(cursor, 'xz_tenant_wallets', 'tenant_id=%s', (tenant,), ENTERPRISE_FINANCIAL_SCHEMA),
                 'ledger': _rows(cursor, 'xz_wallet_ledger', 'task_id=%s', (tid,), FINANCIAL_SCHEMA),
                 'billing_lifecycle_events': _rows(cursor, 'xz_billing_lifecycle_events', 'task_id=%s', (tid,), FINANCIAL_SCHEMA),
             }
