@@ -242,6 +242,8 @@ required_scripts = {
     "ops/quarantine-live-snapshot.py",
     "ops/quarantine-psql-transport.py",
     "ops/verify-image-quarantine-capability.py",
+    "ops/first-upgrade-cold.py",
+    "ops/auto_monitor_killswitch.py",
 }
 if not isinstance(scripts_hash, dict) or not required_scripts.issubset(scripts_hash):
     fail("PROTECTED_FILE_MISSING: deploy_scripts_hash omits required deployment helpers")
@@ -335,9 +337,17 @@ try:
     actual_id = capability.verify(proof.get('runtime_capability'), image_reference, proof_sha, policy)
     if not expected_local_id or actual_id != expected_local_id:
         fail('LOCAL_IMAGE_MISMATCH: capability requires pinned local image ID')
-    rollback_id = capability.verify(proof.get('rollback_runtime_capability'), prev_ref, receipt_data.get('previous_git_sha'), policy)
-    if rollback_id != prev_id:
-        fail('ROLLBACK_CAPABILITY_IMAGE_MISMATCH')
+    if proof.get('cold_recovery_policy') is not None:
+        cold_path = 'ops/first-upgrade-cold.py'
+        cold = types.ModuleType('first_upgrade_cold')
+        cold.__file__ = os.path.abspath(cold_path)
+        with open(cold_path, 'rb') as stream:
+            exec(compile(stream.read(), cold_path, 'exec'), cold.__dict__)
+        cold.verify_policy(proof, actual_compose_data, capability.Docker(), receipt_path)
+    else:
+        rollback_id = capability.verify(proof.get('rollback_runtime_capability'), prev_ref, receipt_data.get('previous_git_sha'), policy)
+        if rollback_id != prev_id:
+            fail('ROLLBACK_CAPABILITY_IMAGE_MISMATCH')
 except Exception:
     fail('RUNTIME_CAPABILITY_INVALID: restage before stop required')
 
