@@ -567,7 +567,7 @@ def authenticated_proof(path):
     if expires <= datetime.datetime.now(datetime.timezone.utc):
         raise Refused('authenticated Proof expired: restage before stop')
     scripts = proof.get('deploy_scripts_hash') or {}
-    for name in ('deploy.sh', 'rollback.sh', 'ops/prestage-release.sh', 'ops/verify-prestage-proof.sh', 'ops/verify-image-quarantine-capability.py', 'ops/verify-release-runtime.py'):
+    for name in ('deploy.sh', 'rollback.sh', 'ops/prestage-release.sh', 'ops/verify-prestage-proof.sh', 'ops/verify-image-quarantine-capability.py', 'ops/verify-release-runtime.py', 'ops/first-upgrade-cold.py', 'ops/auto_monitor_killswitch.py'):
         with open(os.path.join(ROOT, name), 'rb') as stream:
             if scripts.get(name) != sha(stream.read()):
                 raise Refused('protected capability helper bytes changed')
@@ -611,7 +611,8 @@ def verify_pid1_policy(docker, cid, obj, policy, expected_env):
         raise Refused('actual PID1 environment policy mismatch')
 
 
-def verify_running(docker, model, evidence, ref):
+def verify_running_processes(docker, model, evidence, ref):
+    """Internal process-only observation; no SQL and no CLI skip gate."""
     identity = evidence['identity']
     image = docker.inspect('image', identity['local_image_id'])
     for service, policy in evidence['policy']['roles'].items():
@@ -643,6 +644,12 @@ def verify_running(docker, model, evidence, ref):
     postgres = docker.text(['compose', '-f', model['_compose_file'], '--env-file', model['_env_file'], 'ps', '-q', 'postgres'])
     if not postgres or '\n' in postgres or not docker.inspect('container', postgres)['State']['Running']:
         raise Refused('actual barrier database singleton unavailable')
+    if image_identity(docker, ref, identity['release_sha']) != identity:
+        raise Refused('image substituted during running observation')
+
+
+def verify_running(docker, model, evidence, ref):
+    verify_running_processes(docker, model, evidence, ref)
     # Complementary catalog health on the actual Compose singleton, with the
     # original READ ONLY/statement_timeout and credentials-in-container policy.
     # Never inherit the legacy test-container override in this production gate.
@@ -658,7 +665,7 @@ def verify_running(docker, model, evidence, ref):
     finally:
         if inherited_test is not None:
             os.environ['XIANZHI_TEST_CONTAINER'] = inherited_test
-    if image_identity(docker, ref, identity['release_sha']) != identity:
+    if image_identity(docker, ref, evidence['identity']['release_sha']) != evidence['identity']:
         raise Refused('image substituted during running observation')
 
 

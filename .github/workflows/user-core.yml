@@ -117,10 +117,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: ShellCheck deployment and release scripts
         run: |
           shellcheck deploy.sh rollback.sh ops/prestage-release.sh ops/verify-prestage-proof.sh
+
+      - name: Test first-upgrade cold shell and ordinary capable rollback contracts
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/first-upgrade-cold-test.py
+          node --test tests/prestaged-release.test.mjs
+
+      - name: Test cold recovery against owned network-none PostgreSQL and actual Docker
+        run: |
+          set -euo pipefail
+          docker pull pgvector/pgvector:pg16
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/first-upgrade-cold-docker-test.py
 
       - name: Test lock signals and owner lifecycle
         run: python3 tests/prestaged-lock-signals.py

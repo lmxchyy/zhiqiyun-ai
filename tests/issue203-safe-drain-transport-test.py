@@ -190,7 +190,8 @@ class TransportTests(unittest.TestCase):
                  'ops/run-migrations.sh', 'ops/prestage-release.sh', 'ops/verify-prestage-proof.sh',
                  'ops/verify-release-runtime.py', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py',
                  'ops/quarantine-approval.py', 'ops/quarantine-live-snapshot.py', 'ops/quarantine-psql-transport.py',
-                 'ops/verify-image-quarantine-capability.py']
+                 'ops/verify-image-quarantine-capability.py', 'ops/first-upgrade-cold.py',
+                 'ops/auto_monitor_killswitch.py']
         config = json.loads(command(self.cmd + ['config', '--format', 'json']))
         proof = dict(git_sha=self.release, expires_at=(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)).isoformat(),
             proof_nonce=uuid.uuid4().hex, compose_hash=t.digest_file(str(self.compose)), env_hash=t.digest_file(str(self.env)),

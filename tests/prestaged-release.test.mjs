@@ -162,6 +162,8 @@ async function setupSandbox(options = {}) {
   await copyFile(new URL("ops/quarantine-approval/registry.json", root), join(quarantineApprovalDir, "registry.json"));
   await copyFile(new URL("ops/quarantine-live-snapshot.py", root), join(opsDir, "quarantine-live-snapshot.py"));
   await copyFile(new URL("ops/quarantine-psql-transport.py", root), join(opsDir, "quarantine-psql-transport.py"));
+  await copyFile(new URL("ops/first-upgrade-cold.py", root), join(opsDir, "first-upgrade-cold.py"));
+  await copyFile(new URL("ops/auto_monitor_killswitch.py", root), join(opsDir, "auto_monitor_killswitch.py"));
   await writeFile(join(opsDir, "verify-image-quarantine-capability.py"), capabilityFixtureCode, "utf8");
   await copyFile(new URL("database/migrations/121-provider-execution-quarantine.sql", root), join(migrationsDir, "121-provider-execution-quarantine.sql"));
 

@@ -40,6 +40,7 @@ RECOVERY_LOCK="${PRESTAGE_DIR}/release.lock.recovering"
 OWNER_TOKEN="${BASHPID:-$$}_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
 IS_LOCK_OWNER=0
 TMP_PROOF=""
+FIRST_UPGRADE_COLD=0
 
 log() {
   printf '[prestage] %s\n' "$*"
@@ -86,6 +87,10 @@ while [ $# -gt 0 ]; do
     -m|--manifest)
       RELEASE_MANIFEST="$2"
       shift 2
+      ;;
+    --first-upgrade-cold)
+      FIRST_UPGRADE_COLD=1
+      shift
       ;;
     --rollback-manifest)
       ROLLBACK_MANIFEST="$2"
@@ -197,7 +202,11 @@ acquire_release_lock() {
   fail "CONCURRENCY_LOCKED: Another release process currently holds the lock."
 }
 
+if [ -e "${PRESTAGE_DIR}/cold-recovery-required" ] || [ -L "${PRESTAGE_DIR}/cold-recovery-required" ]; then
+  fail "COLD_RECOVERY_REQUIRED: separate human authorization required; no prestage."
+fi
 acquire_release_lock
+export FIRST_UPGRADE_COLD
 
 command -v git >/dev/null 2>&1 || fail "git is not installed."
 command -v docker >/dev/null 2>&1 || fail "Docker is not installed."
@@ -955,6 +964,8 @@ deploy_scripts = [
     "ops/quarantine-live-snapshot.py",
     "ops/quarantine-psql-transport.py",
     "ops/verify-image-quarantine-capability.py",
+    "ops/first-upgrade-cold.py",
+    "ops/auto_monitor_killswitch.py",
 ]
 deploy_scripts_hash = {}
 for s in deploy_scripts:
@@ -994,9 +1005,20 @@ try:
     runtime_capability = capability.attest(image_ref, git_sha, policy)
     with open(rollback_receipt_path, 'r', encoding='utf-8') as stream:
         rollback_receipt = json.load(stream)
-    rollback_capability = capability.attest(rollback_receipt['previous_image_reference'], rollback_receipt['previous_git_sha'], policy)
-    if rollback_capability['identity']['local_image_id'] != rollback_receipt['previous_image_id']:
-        fail('ROLLBACK_CAPABILITY_IMAGE_MISMATCH: restage required')
+    cold_policy = None
+    rollback_capability = None
+    if os.environ.get('FIRST_UPGRADE_COLD') == '1':
+        cold_path = 'ops/first-upgrade-cold.py'
+        cold = types.ModuleType('first_upgrade_cold')
+        cold.__file__ = os.path.abspath(cold_path)
+        with open(cold_path, 'rb') as stream:
+            exec(compile(stream.read(), cold_path, 'exec'), cold.__dict__)
+        cold_policy = cold.create_policy(rollback_receipt_path, rollback_receipt_hash, effective_data,
+                                        os.path.join(os.path.dirname(rollback_receipt_path), 'cold-compose.json'), capability.Docker())
+    else:
+        rollback_capability = capability.attest(rollback_receipt['previous_image_reference'], rollback_receipt['previous_git_sha'], policy)
+        if rollback_capability['identity']['local_image_id'] != rollback_receipt['previous_image_id']:
+            fail('ROLLBACK_CAPABILITY_IMAGE_MISMATCH: restage required')
 except Exception:
     fail('RUNTIME_CAPABILITY_FAILED: fresh target/rollback packaged behavior required')
 now = datetime.datetime.now(datetime.timezone.utc)
@@ -1014,6 +1036,7 @@ proof_payload = {
     "local_image_id": local_img_id,
     "runtime_capability": runtime_capability,
     "rollback_runtime_capability": rollback_capability,
+    "cold_recovery_policy": cold_policy,
     "compose_hash": compose_hash,
     "bound_config_hash": bound_config_hash,
     "migrations_tree_hash": migrations_tree_hash,

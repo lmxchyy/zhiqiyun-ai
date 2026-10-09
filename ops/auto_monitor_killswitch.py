@@ -40,7 +40,7 @@ def release_lock(root):
     token = str(uuid.uuid4())
     # No monitor-side stale recovery: malformed, symlink and dead-owner locks
     # all defer to the release/operator protocol, without deleting anything.
-    if os.path.lexists(str(lock)) or os.path.lexists(str(recovery)):
+    if release_lock_present(root):
         raise ReleaseLocked()
     directory.mkdir(parents=True, exist_ok=True)
     try:
@@ -51,7 +51,7 @@ def release_lock(root):
         (lock / "owner_token").write_text(token + "\n")
         (lock / "owner_pid").write_text(str(os.getpid()) + "\n")
         (lock / "created_at").write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n")
-        if os.path.lexists(str(recovery)):
+        if os.path.lexists(str(recovery)) or os.path.lexists(str(directory / "cold-recovery-required")):
             raise ReleaseLocked()
         check_interrupted()
         yield lock
@@ -154,7 +154,7 @@ def release_lock_path(root=None):
 def release_lock_present(root=None):
     directory = release_lock_path(root)
     return any(os.path.lexists(str(directory / name))
-               for name in ("release.lock", "release.lock.recovering"))
+               for name in ("release.lock", "release.lock.recovering", "cold-recovery-required"))
 
 
 def scrape_metrics():

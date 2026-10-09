@@ -22,6 +22,10 @@ LOCK_DIR="${PRESTAGE_DIR}/release.lock"
 RECOVERY_LOCK="${PRESTAGE_DIR}/release.lock.recovering"
 OWNER_TOKEN="${BASHPID:-$$}_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
 IS_LOCK_OWNER=0
+FIRST_UPGRADE_COLD=0
+COLD_ARMED=0
+COLD_STAGE=explicit-cold-rollback
+COLD_TRIGGER=exit-failure
 
 log() {
   printf '[rollback] %s\n' "$*"
@@ -33,6 +37,11 @@ fail() {
 }
 
 cleanup() {
+  local cold_failed=0
+  if [ "${COLD_ARMED:-0}" = "1" ]; then
+    python3 -B ops/first-upgrade-cold.py fence --prestage-dir "$PRESTAGE_DIR" --stage "$COLD_STAGE" --reason "$COLD_TRIGGER" --owner "$OWNER_TOKEN" --proof "$PRESTAGE_PROOF_FILE" || cold_failed=1
+    COLD_ARMED=0
+  fi
   if [ "$IS_LOCK_OWNER" = "1" ]; then
     if [ -f "${LOCK_DIR}/owner_token" ]; then
       local current_token
@@ -42,11 +51,16 @@ cleanup() {
       fi
     fi
   fi
+  if [ "$cold_failed" = "1" ]; then
+    printf '%s\n' "[rollback] COLD_RECOVERY_UNKNOWN: hold retained; stop/audit not proven." >&2
+    exit 1
+  fi
 }
 
 handle_signal() {
   local sig="$1"
   trap - "$sig" EXIT
+  COLD_TRIGGER="signal-$sig"
   cleanup
   log "Terminated by signal $sig."
   case "$sig" in
@@ -61,6 +75,10 @@ trap cleanup EXIT
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --first-upgrade-cold)
+      FIRST_UPGRADE_COLD=1
+      shift
+      ;;
     --capability-proof)
       PRESTAGE_PROOF_FILE="$2"
       shift 2
@@ -167,6 +185,13 @@ acquire_release_lock() {
   fail "CONCURRENCY_LOCKED: Another release process currently holds the lock."
 }
 
+if [ -e "${PRESTAGE_DIR}/cold-recovery-required" ] || [ -L "${PRESTAGE_DIR}/cold-recovery-required" ]; then
+  if [ "$FIRST_UPGRADE_COLD" = "1" ]; then
+    acquire_release_lock
+    python3 -B ops/first-upgrade-cold.py fence --prestage-dir "$PRESTAGE_DIR" --stage rollback-reentry --reason reentry || fail "COLD_RECOVERY_UNKNOWN: hold retained."
+  fi
+  fail "COLD_RECOVERY_REQUIRED: separate human authorization required; no rollback start."
+fi
 acquire_release_lock
 
 command -v git >/dev/null 2>&1 || fail "git is not installed."
@@ -775,6 +800,19 @@ if [ -n "$ROLLBACK_RECEIPT" ]; then
   XIANZHI_IMAGE_REFERENCE="$FROZEN_PREV_REF"
   export XIANZHI_IMAGE_REFERENCE
   log "Using verified rollback receipt: $ROLLBACK_RECEIPT (manifest: $FROZEN_RB_MANIFEST, sha256: $FROZEN_RB_HASH)"
+fi
+
+if [ "$FIRST_UPGRADE_COLD" = "1" ]; then
+  if [ -z "$ROLLBACK_RECEIPT" ] || [ -z "$PRESTAGE_PROOF_FILE" ]; then
+    fail "COLD_POLICY_REQUIRED: actual receipt and signed Proof required."
+  fi
+  # Arm validates target capability, protected bytes, official exact unsupported
+  # rollback identity and signed no-restart policy. This branch NEVER runs SQL.
+  COLD_ARMED=1
+  python3 -B ops/first-upgrade-cold.py arm --proof "$PRESTAGE_PROOF_FILE" --receipt "$ROLLBACK_RECEIPT" --compose-file "$COMPOSE_FILE" --env-file "$ENV_FILE" --prestage-dir "$PRESTAGE_DIR" --owner "$OWNER_TOKEN" --stage explicit-cold-rollback >/dev/null || fail "COLD_POLICY_INVALID: no recovery authorized."
+  python3 -B ops/first-upgrade-cold.py fence --prestage-dir "$PRESTAGE_DIR" --stage explicit-cold-rollback --reason explicit-cold-rollback --owner "$OWNER_TOKEN" --proof "$PRESTAGE_PROOF_FILE" || fail "COLD_RECOVERY_UNKNOWN: hold retained."
+  COLD_ARMED=0
+  fail "STOPPED_RECOVERY_REQUIRED: no old business image started; separate human authorization required."
 fi
 
 # Legacy emergency entry contract intentionally changed: no stop/revoke/build.

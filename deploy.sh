@@ -28,9 +28,18 @@ RECOVERY_LOCK="${PRESTAGE_DIR}/release.lock.recovering"
 OWNER_TOKEN="${BASHPID:-$$}_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
 export OWNER_TOKEN
 IS_LOCK_OWNER=0
+FIRST_UPGRADE_COLD=0
+COLD_ARMED=0
+COLD_STAGE=preflight
+COLD_TRIGGER=exit-failure
+COLD_COMPOSE_FILE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --first-upgrade-cold)
+      FIRST_UPGRADE_COLD=1
+      shift
+      ;;
     --prestaged)
       PRESTAGED_RELEASE=1
       IMMUTABLE_RELEASE=1
@@ -99,6 +108,11 @@ fail() {
 }
 
 cleanup() {
+  local cold_failed=0
+  if [ "${COLD_ARMED:-0}" = "1" ]; then
+    python3 -B ops/first-upgrade-cold.py fence --prestage-dir "$PRESTAGE_DIR" --stage "$COLD_STAGE" --reason "$COLD_TRIGGER" --owner "$OWNER_TOKEN" --proof "$PRESTAGE_PROOF_FILE" || cold_failed=1
+    COLD_ARMED=0
+  fi
   if [ "$IS_LOCK_OWNER" = "1" ]; then
     if [ -f "${LOCK_DIR}/owner_token" ]; then
       local current_token
@@ -108,11 +122,16 @@ cleanup() {
       fi
     fi
   fi
+  if [ "$cold_failed" = "1" ]; then
+    printf '%s\n' "[deploy] COLD_RECOVERY_UNKNOWN: hold retained; stop/audit not proven." >&2
+    exit 1
+  fi
 }
 
 handle_signal() {
   local sig="$1"
   trap - "$sig" EXIT
+  COLD_TRIGGER="signal-$sig"
   cleanup
   log "Terminated by signal $sig."
   case "$sig" in
@@ -328,6 +347,11 @@ fail(f"Health and readiness verification timed out after {max_wait_seconds}s. La
 PY
 }
 
+if [ -e "${PRESTAGE_DIR}/cold-recovery-required" ] || [ -L "${PRESTAGE_DIR}/cold-recovery-required" ]; then
+  fail "COLD_RECOVERY_REQUIRED: separate human authorization required; no deployment."
+fi
+[ "$FIRST_UPGRADE_COLD" != "1" ] || [ "$PRESTAGED_RELEASE" = "1" ] || fail "COLD_POLICY_REQUIRED: --first-upgrade-cold requires signed prestaged release."
+
 command -v git >/dev/null 2>&1 || fail "git is not installed."
 command -v docker >/dev/null 2>&1 || fail "Docker is not installed."
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is not available."
@@ -438,6 +462,8 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
   fi
   XIANZHI_IMAGE_REFERENCE="$(bash ops/verify-prestage-proof.sh "$PRESTAGE_PROOF_FILE" "$PRESTAGED_RELEASE_SHA" "$COMPOSE_FILE" "$ENV_FILE" "${RELEASE_TRUST_KEY_FILE:-}" "$RELEASE_LEDGER_FILE")"
   export XIANZHI_IMAGE_REFERENCE
+  proof_cold="$(python3 -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("cold_recovery_policy") is not None else 0)' "$PRESTAGE_PROOF_FILE")"
+  [ "$proof_cold" = "$FIRST_UPGRADE_COLD" ] || fail "COLD_POLICY_OPT_IN_MISMATCH: signed policy and --first-upgrade-cold must agree."
   case "$XIANZHI_IMAGE_REFERENCE" in
     *@sha256:*) ;;
     *) fail "Prestage proof did not provide a digest-pinned image reference." ;;
@@ -546,6 +572,15 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
   capability_args=(--verify-proof "$PRESTAGE_PROOF_FILE" --image "$XIANZHI_IMAGE_REFERENCE" --release-sha "$PRESTAGED_RELEASE_SHA" --compose-file "$COMPOSE_FILE" --env-file "$ENV_FILE")
   python3 -B ops/verify-image-quarantine-capability.py "${capability_args[@]}" >/dev/null || fail "RUNTIME_CAPABILITY_INVALID: Restage before stop."
 
+  if [ "$FIRST_UPGRADE_COLD" = "1" ]; then
+    COLD_STAGE=first-stop
+    COLD_ARMED=1
+    COLD_COMPOSE_FILE="$(python3 -B ops/first-upgrade-cold.py arm --proof "$PRESTAGE_PROOF_FILE" --compose-file "$COMPOSE_FILE" --env-file "$ENV_FILE" --prestage-dir "$PRESTAGE_DIR" --owner "$OWNER_TOKEN" --stage "$COLD_STAGE")" || fail "COLD_ARM_FAILED: no cold cutover authorized."
+    # Disable every relevant OLD restart policy before stopping. Arm remains
+    # distinct from a recovery receipt so only this in-flight success can finish.
+    python3 -B ops/first-upgrade-cold.py prepare --owner "$OWNER_TOKEN" --proof "$PRESTAGE_PROOF_FILE" --prestage-dir "$PRESTAGE_DIR" --stage "$COLD_STAGE" --reason exit-failure >/dev/null || fail "COLD_FENCE_FAILED: stopped state unknown."
+  fi
+
   # Stop old API and worker services safely, verifying zero running owner processes
   log "Safely stopping old API and worker containers..."
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" stop -t 120 xianzhi-ai smartvideo-worker || fail "Failed to stop old API/worker containers."
@@ -568,6 +603,7 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
   [ -z "$running_old" ] || fail "Old API/worker containers failed to stop completely. Parallel old+new forbidden."
 
   # Execute database migration and verify actual exit code
+  COLD_STAGE=migration
   log "Executing database migration..."
   docker compose \
     -f "$COMPOSE_FILE" \
@@ -575,7 +611,7 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
     rm -f migrate >/dev/null 2>&1 || true
 
   log "Running migration container in detached mode (--pull never)..."
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-build --pull never migrate
+  docker compose -f "${COLD_COMPOSE_FILE:-$COMPOSE_FILE}" --env-file "$ENV_FILE" up -d --no-build --pull never migrate
 
   migrate_cid="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -a -q migrate)" || fail "Migration status query failed."
   [ -n "$migrate_cid" ] || fail "Failed to inspect migrate container ID."
@@ -611,8 +647,9 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
       --prestage-proof "$PRESTAGE_PROOF_FILE"
   fi
 
+  COLD_STAGE=target-start
   log "Starting immutable production services from prestaged images (zero pull)..."
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-build --remove-orphans --pull never
+  docker compose -f "${COLD_COMPOSE_FILE:-$COMPOSE_FILE}" --env-file "$ENV_FILE" up -d --no-build --remove-orphans --pull never
 elif [ "$IMMUTABLE_RELEASE" = "1" ]; then
   log "Preparing database migration..."
   docker compose \
@@ -641,6 +678,7 @@ if [ "$IMMUTABLE_RELEASE" = "1" ]; then
 
   if [ "$PRESTAGED_RELEASE" = "1" ]; then
     # Full health & readiness gating verification (including RepoDigests, API health/ready, worker healthy)
+    COLD_STAGE=target-health
     verify_health_and_readiness "$expected_image_id"
     python3 -B ops/verify-image-quarantine-capability.py "${capability_args[@]}" --post-start >/dev/null || fail "RUNTIME_CAPABILITY_POST_START_MISMATCH: Actual process policy failed."
     python3 ops/verify-release-runtime.py post "$COMPOSE_FILE" "$ENV_FILE"
@@ -667,6 +705,7 @@ if [ "$IMMUTABLE_RELEASE" = "1" ]; then
     log "Running API and worker match the immutable release digest."
   fi
 
+  COLD_STAGE=persist-release
   update_env_file_key "$ENV_FILE" "XIANZHI_IMAGE_REFERENCE" "$XIANZHI_IMAGE_REFERENCE"
   log "Persisted XIANZHI_IMAGE_REFERENCE to $ENV_FILE."
 
@@ -710,6 +749,12 @@ with open(tmp, "w", encoding="utf-8") as lf:
 os.replace(tmp, ledger_file)
 PY
   fi
+fi
+
+if [ "$COLD_ARMED" = "1" ]; then
+  COLD_STAGE=final-audit
+  python3 -B ops/first-upgrade-cold.py complete --proof "$PRESTAGE_PROOF_FILE" --compose-file "$COMPOSE_FILE" --env-file "$ENV_FILE" --prestage-dir "$PRESTAGE_DIR" --owner "$OWNER_TOKEN" --ledger "$RELEASE_LEDGER_FILE" || fail "COLD_COMPLETION_FAILED: recovery required."
+  COLD_ARMED=0
 fi
 
 log "Pruning dangling images..."
