@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	"xianzhi-ai/backend-go/internal/config"
+	"xianzhi-ai/backend-go/internal/messaging"
 	pe "xianzhi-ai/backend-go/internal/providerexecution"
 	storage "xianzhi-ai/backend-go/internal/storage"
 )
@@ -37,7 +39,7 @@ func DispatchQuarantineCapability(args []string, role string) (bool, error) {
 		return true, errors.New("invalid quarantine capability command")
 	}
 	phase := args[2]
-	if phase != "blocked" && phase != "allowed" && phase != "unavailable" {
+	if phase != "blocked" && phase != "allowed" && phase != "unavailable" && phase != "history" && phase != "history-control" {
 		return true, errors.New("invalid quarantine capability phase")
 	}
 	if role != "api" && role != "generation-worker" {
@@ -78,6 +80,22 @@ func DispatchQuarantineCapability(args []string, role string) (bool, error) {
 	// object provider is synthetic, with independently observed HTTP writes.
 	a.fileService = storage.NewService(storage.NewPostgresRepository(db), capabilityStorageFactory{}, storage.Options{DefaultProvider: "s3", Endpoint: "http://fixture-sink:8080", AccessKey: "fixture", SecretKey: "fixture", Bucket: "fixture", DefaultQuotaBytes: 1 << 20, MaxUploadBytes: 1 << 20, MasterKey: password})
 	s := pe.NewStore(db)
+	if phase == "history" {
+		return true, a.challengeHistoricalImages(ctx, db, owner, role)
+	}
+	if phase == "history-control" {
+		// Only the remote is synthetic; the normal consumer, orchestration,
+		// provider hook, persistence, billing and inbox completion are real.
+		// The host seeds a real admitted OpenAI-compatible channel bound
+		// only to fixture-sink. Sentinel/mock models skip provider hooks.
+		a.cfg = config.Config{ProviderExecutionSafetyEnabled: true}
+		taskID := owner + "-normal-control"
+		envelope := &messaging.Envelope{EventID: taskID + "-event", AggregateType: "generation_task", AggregateID: taskID, EventType: messaging.GenerationImageNormalRoutingKey, Data: map[string]any{"task_id": taskID, "dispatch_mode": imageDispatchNormal, "execution_generation": int64(1)}}
+		if err := a.processGenerationNormalMessage(ctx, messaging.NewInboxStore(db), envelope); err != nil {
+			return true, fmt.Errorf("funded normal consumer control failed: %w", err)
+		}
+		return true, json.NewEncoder(os.Stdout).Encode(map[string]any{"protocol": 1, "history_protocol": 1, "owner": owner, "phase": phase, "role": role, "release_sha": CapabilityReleaseSHA, "operations": map[string]string{"normal-consumer": "completed"}})
+	}
 	points := NewPostgresPersonalPointStore(db)
 	results := make(map[string]string)
 	details := make(map[string]any)
@@ -192,6 +210,12 @@ func DispatchQuarantineCapability(args []string, role string) (bool, error) {
 			return true, err
 		}
 	}
+	if phase == "allowed" {
+		if _, err := (capabilityImageProvider{}).Get(ctx, "fixture-query-control"); err != nil {
+			return true, err
+		}
+		details["provider-query"] = "observed-get-control"
+	}
 	// Typed nil interfaces must not panic or become a no-barrier store.
 	var nilDB *sql.DB
 	var nilTx *sql.Tx
@@ -275,3 +299,114 @@ func (capabilityStorageProvider) HeadObject(context.Context, string) (storage.Ob
 	return storage.ObjectMetadata{}, storage.ErrFileNotFound
 }
 func (capabilityStorageProvider) TestConnection(context.Context) error { return nil }
+
+// History attests reachable task-rooted entrypaths, NOT direct persist/transition
+// primitives. Non-enrolled rows have no general-purpose immutability barrier.
+func (a api) challengeHistoricalImages(ctx context.Context, db *sql.DB, owner, role string) error {
+	s := pe.NewStore(db)
+	results := map[string]string{}
+	inbox := messaging.NewInboxStore(db)
+	for _, name := range []string{"text-normal-legacy", "text-normal", "image-normal-legacy", "image-normal", "text-canary-legacy", "text-canary", "image-canary-legacy", "image-canary", "orphan"} {
+		taskID := owner + "-" + name
+		orphan := name == "orphan"
+		if orphan {
+			var count int
+			if err := db.QueryRowContext(ctx, `SELECT count(*) FROM xz_generation_tasks WHERE id=$1`, taskID).Scan(&count); err != nil || count != 0 {
+				return errors.New("history orphan task association is not absent")
+			}
+		}
+		mode := imageDispatchNormal
+		if strings.Contains(name, "canary") {
+			mode = imageDispatchCanary
+		}
+		route := messaging.GenerationImageNormalRoutingKey
+		if mode == imageDispatchCanary {
+			route = messaging.GenerationCanaryRoutingKey
+		}
+		for _, g := range []int64{2, 3, 4} {
+			envelope := &messaging.Envelope{EventID: fmt.Sprintf("%s-history-%d", taskID, g), AggregateType: "generation_task", AggregateID: taskID, EventType: route, Data: map[string]any{"task_id": taskID, "dispatch_mode": mode, "execution_generation": g}}
+			err := a.processGenerationImageMessage(ctx, inbox, envelope, mode)
+			if orphan {
+				if err == nil || !messaging.IsPermanent(err) || err.Error() != fmt.Sprintf("generation task %s not found", taskID) {
+					return errors.New("history missing-task consumer rejection absent")
+				}
+			} else if !errors.Is(err, ErrFencedStaleExecution) {
+				return errors.New("history consumer binding rejection absent")
+			}
+		}
+		_, _, err := claimGenerationTaskOwnershipForDispatch(a.store, taskID, 3)
+		if orphan {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return errors.New("history missing-task claim rejection absent")
+			}
+		} else if !errors.Is(err, ErrFencedStaleExecution) {
+			return errors.New("history claim fence absent")
+		}
+		params := map[string]any{"provider": "fixture", providerExecutionTaskParam: taskID}
+		if mode == imageDispatchCanary {
+			params["generation_async_canary"] = true
+		}
+		kind := "TEXT_TO_IMAGE"
+		if strings.HasPrefix(name, "image") {
+			kind = "IMAGE_TO_IMAGE"
+		}
+		req := generation.CreateRequest{UserID: owner, Type: kind, Model: "fixture", Prompt: "synthetic history", Params: params}
+		_, err = guardedImage(ctx, req, capabilityImageProvider{}, s)
+		if orphan {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return errors.New("history missing-task provider rejection absent")
+			}
+			// generationTaskTerminal's PostgreSQL status SELECT returns this
+			// exact error only for sql.ErrNoRows, before ownership/provider work.
+			if err := a.runGenerationTaskForDispatch(taskID, a.generationService, req, 3); err == nil || err.Error() != fmt.Sprintf("generation task %s not found", taskID) {
+				return fmt.Errorf("history missing-task orchestration rejection absent: %v", err)
+			}
+		} else {
+			if !errors.Is(err, ErrFencedStaleExecution) {
+				return fmt.Errorf("history provider binding fence absent: %w", err)
+			}
+			tx, err := db.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			task, err := generationTaskForUpdate(ctx, tx, taskID)
+			_ = tx.Rollback()
+			if err != nil {
+				return err
+			}
+			execution, err := s.GetLatestByTask(ctx, taskID)
+			if err != nil {
+				return err
+			}
+			if err = a.recoverSucceededGenerationTask(task, execution); !errors.Is(err, ErrFencedStaleExecution) {
+				return errors.New("history local recovery fence absent")
+			}
+			if err = a.runGenerationTaskForDispatch(taskID, a.generationService, req, 3); !errors.Is(err, ErrFencedStaleExecution) {
+				return errors.New("history orchestration fence absent")
+			}
+		}
+		results[name] = "read-only-rejected"
+	}
+	a.repairStaleGenerationTasksWithContext(ctx, time.Minute)
+	scheduler := NewGenerationScheduler(db, GenerationSchedulerOptions{Owner: "fixture-history-scheduler", BatchTasksPerUser: 2})
+	if n, err := scheduler.RecoverStaleDispatches(ctx); err != nil || n != 0 {
+		return errors.New("history scheduler recovery changed history")
+	}
+	if n, err := scheduler.dispatchUserTx(ctx, owner, time.Now().UTC()); err != nil || n != 0 {
+		return errors.New("history scheduler admission changed history")
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{"protocol": 1, "history_protocol": 1, "owner": owner, "phase": "history", "role": role, "release_sha": CapabilityReleaseSHA, "operations": results})
+}
+
+func (capabilityImageProvider) Get(ctx context.Context, id string) (any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://fixture-sink:8080/provider-query", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	return map[string]any{"status": "processing"}, nil
+}

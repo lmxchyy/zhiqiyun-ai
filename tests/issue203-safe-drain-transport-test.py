@@ -1,4 +1,4 @@
-"""LOCAL Docker Desktop, UUID-owned real CLI transport replay; zero SKIP.
+"""LOCAL Docker Linux/Desktop, UUID-owned real CLI transport replay; zero SKIP.
 
 Run: python tests/issue203-safe-drain-transport-test.py
 No production roots, resources, manifests or credentials. All logs use the
@@ -26,10 +26,11 @@ import uuid
 ROOT = Path(__file__).resolve().parent.parent
 EVIDENCE = ROOT / '.evidence/issue203/safe-drain-transport'
 LABEL = 'issue203.safe-drain-transport.owner'
-# P4 explicitly unfreezes only these two paths. Original approved hashes
-# remain in the P4 baseline; these pins are the reviewed P4 bytes.
-FROZEN = {'rollback.sh': '6bd6052b79b80d85bc28fb9e27ec2ee88185c8249b15b9c373c2891a11bc8680',
-          'tests/issue203-control-plane-test.py': '517aa3d31ccd920fa0c82c9e4f62f370016173b92377742fbaf0dc468046effe'}
+# Exact approved base bytes: #212 cold rollback fencing and the merged
+# control-fixture inode-reuse correction superseded the stale P4 pins.
+# Keep literal freezes: subsequent changes still reject, never recompute.
+FROZEN = {'rollback.sh': 'b9fba73deee7e7d5135e9a7d6d951afe0e294eb1947b063f9d735d827b406184',
+          'tests/issue203-control-plane-test.py': 'b3a799bf0fde1496f7362158d6fcfe5df1ca6cbaa0b5338dc5a187c9efce3b54'}
 sys.dont_write_bytecode = True
 
 
@@ -125,6 +126,9 @@ class TransportTests(unittest.TestCase):
         cls.db.autocommit = True
         paths = sorted(p for p in (ROOT / 'database/migrations').glob('[0-9][0-9][0-9]-*.sql') if not p.name.endswith('.down.sql'))
         sql = (ROOT / 'database/schema.sql').read_text() + '\n' + '\n'.join(p.read_text() for p in paths)
+        # The real migration runner ledger is not in schema.sql. This fresh,
+        # owner-labelled replay DB must reproduce it for historical observation.
+        sql += "\nCREATE TABLE public.schema_migrations(filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());\nINSERT INTO public.schema_migrations(filename) VALUES('119-execution-generation-fencing.sql');"
         command(['docker', 'exec', '-i', cls.cid, 'psql', '-X', '-U', 'postgres', '-d', 'xianzhi_test', '-v', 'ON_ERROR_STOP=1'], input=sql.encode(), timeout=120)
         cls.live = load('live_tests', ROOT / 'tests/issue203-live-snapshot-test.py')
         cls.approval_tests = load('approval_tests', ROOT / 'tests/issue203-approval-test.py')
@@ -139,17 +143,29 @@ class TransportTests(unittest.TestCase):
         # intentionally inert old broker/worker observation containers.
         cls.capability = load('capability_fixture', ROOT / 'ops/verify-image-quarantine-capability.py')
         source_evidence = json.loads((ROOT / '.evidence/issue203/priority4-runtime-capability/synthetic-evidence-final.json').read_text())
+        if source_evidence.get('identity_only_nonbehavior') is not True or source_evidence.get('synthetic_nonofficial') is not True:
+            raise RuntimeError('identity-only NONOFFICIAL prerequisite required, not behavior evidence')
+        source_hashes = source_evidence.get('source_sha256', {})
+        expected_sources = load('ci_source_inventory', ROOT / 'tests/issue203-safe-drain-ci.py').source_hashes()
+        if source_hashes != expected_sources:
+            raise RuntimeError('packaged prerequisite source drift')
         cls.release = source_evidence['identity']['release_sha']
         cls.target_ref = source_evidence['identity']['repo_digests'][0]
         cls.target_id = source_evidence['identity']['local_image_id']
+        if cls.capability.image_identity(cls.capability.Docker(), cls.target_ref, cls.release) != source_evidence['identity']:
+            raise RuntimeError('immutable prerequisite inventory mismatch')
         for service, binary in (('xianzhi-ai', '/app/xianzhi-api'), ('smartvideo-worker', '/app/smartvideo-worker')):
             cls.model['services'][service]['image'] = cls.target_ref
             cls.model['services'][service]['command'] = [binary]
         cls.model['services']['xianzhi-ai']['environment'].update(XIANZHI_ENV='production', DATABASE_URL='postgres://postgres:synthetic_transport_secret@postgres:5432/xianzhi_test?sslmode=disable')
         cls.compose.write_text(json.dumps(cls.model))
         desired = json.loads(command(cls.cmd + ['config', '--format', 'json']))
+        started = time.monotonic()
         cls.behavior_evidence = cls.capability.attest(cls.target_ref, cls.release, cls.capability.runtime_policy(desired), evidence_directory='/work/capability-owned')
-        cls.secret = 'disposable-local-proof-key-not-production'
+        cls.capability.verify(cls.behavior_evidence, cls.target_ref, cls.release, cls.behavior_evidence['policy'])
+        (cls.work / 'actual-strict-behavior-NONOFFICIAL.json').write_text(json.dumps(dict(fixture_nonofficial=True, elapsed_seconds=time.monotonic() - started, capability=cls.behavior_evidence), indent=2, sort_keys=True))
+        print('FULL_PACKAGED_RESULT roles=2 blocked=2 allowed=2 unavailable=6 history=2 funded_controls=2 budget=300 NONOFFICIAL', flush=True)
+        cls.secret = uuid.uuid4().hex + uuid.uuid4().hex
         os.environ['RELEASE_TRUST_SECRET'] = cls.secret
         print('ACTUAL_RUNTIME Python=' + sys.version.split()[0], flush=True)
         print('ACTUAL_PG ' + cls.cid, flush=True)
@@ -167,6 +183,17 @@ class TransportTests(unittest.TestCase):
         cls.approval_tests.ApprovalTests.tearDownClass()
         # Host finally performs independent owner-label-scoped cleanup as well.
 
+    def signed_manifest(self):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        nb = (now - datetime.timedelta(minutes=5)).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        exp = (now + datetime.timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        snapshots = self.live.core.sample_canonical_live_read_only(self.db, self.fixture.entries)
+        cand = self.approval_tests.approval.build_unsigned_candidate(
+            self.fixture.entries, snapshots, self.release, 'synthetic-operator-key', nb, exp, now)
+        return self.approval_tests.approval.approve_candidate(
+            cand, operator_identity='synthetic-operator', approval_id='synthetic-approval',
+            secret=self.secret, now=now)
+
     def setUp(self):
         self.fixture.setUp()
         self.lock_dir = self.work / 'release.lock'
@@ -175,7 +202,7 @@ class TransportTests(unittest.TestCase):
         (self.lock_dir / 'owner_token').write_text('synthetic-owner-token')
         (self.lock_dir / 'release_sha').write_text(self.release)
         os.environ['OWNER_TOKEN'] = 'synthetic-owner-token'
-        self.manifest.write_bytes(self.fixture.signed_canonical(release_sha=self.release))
+        self.manifest.write_bytes(self.signed_manifest())
         self.write_proof()
 
     def write_proof(self):
@@ -189,7 +216,9 @@ class TransportTests(unittest.TestCase):
         files = ['deploy.sh', 'rollback.sh', 'ops/verify-release-manifest.sh', 'ops/disk-guard.sh',
                  'ops/run-migrations.sh', 'ops/prestage-release.sh', 'ops/verify-prestage-proof.sh',
                  'ops/verify-release-runtime.py', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py',
-                 'ops/quarantine-approval.py', 'ops/quarantine-live-snapshot.py', 'ops/quarantine-psql-transport.py',
+                 'ops/quarantine-approval.py', 'ops/create-quarantine-candidate.py',
+                 'ops/quarantine-approval/registry.json',
+                 'ops/quarantine-live-snapshot.py', 'ops/quarantine-psql-transport.py',
                  'ops/verify-image-quarantine-capability.py', 'ops/first-upgrade-cold.py',
                  'ops/auto_monitor_killswitch.py']
         config = json.loads(command(self.cmd + ['config', '--format', 'json']))
@@ -465,6 +494,10 @@ class TransportTests(unittest.TestCase):
                 fingerprint = hashlib.sha256(test.transport.re.sub(
                     r' AND e\.id NOT IN \([0-9]+(?:,[0-9]+)*\)',
                     ' AND e.id NOT IN (<execution_ids>)', sql.strip().rstrip(';')).encode()).hexdigest()
+                if fingerprint not in test.transport.QUERY_TYPES:
+                    fingerprint = hashlib.sha256(test.transport.re.sub(
+                        r' AND e\.id NOT IN \([0-9]+(?:,[0-9]+)*\)',
+                        ' AND e.id NOT IN (<execution_ids>)', sql.strip().rstrip(';')).replace('%%', '%').encode()).hexdigest()
                 left, right = actual, expected
                 if fingerprint in CANONICAL_MULTISET_QUERIES:
                     test.assertTrue(all(oid == 25 for oid in expected_types))
@@ -529,7 +562,7 @@ class TransportTests(unittest.TestCase):
         finally:
             self.live.core._approval.LEGACY_NULL_IDENTITY_PINS = old_pins
         self.fixture.stored_asset_fixture()
-        self.manifest.write_bytes(self.fixture.signed_canonical(release_sha=self.release))
+        self.manifest.write_bytes(self.signed_manifest())
         with self.db.cursor() as native:
             cur = ComparedCursor(native)
             cur.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
@@ -540,6 +573,83 @@ class TransportTests(unittest.TestCase):
             drain = load('drain_source', ROOT / 'ops/verify-safe-drain.py')
             for ids in (None, [901, 902], [9223372036854775807]):
                 cur.execute(drain.build_sql(ids))
+            cur.execute(drain.HISTORY_KEYS_SQL)
+            for ids in (None, [901, 902], [9223372036854775807]):
+                cur.execute(drain.build_history_sql(ids))
+            GO_TRIM_SPACE = ' \t\n\r'
+            q1 = '''SELECT * FROM (
+SELECT execution_generation,status,task_status,user_id,tenant_id,
+       jsonb_typeof(result_ids),type,model,
+       (jsonb_typeof(params)='object'
+        AND (NOT (params ? 'billing_scope') OR jsonb_typeof(params->'billing_scope')='string')
+        AND upper(btrim(billing_account_type,%s)) IN ('','PERSONAL')
+        AND upper(btrim(coalesce(params->>'billing_scope',''),%s)) IN ('','PERSONAL'))
+FROM public.xz_generation_tasks WHERE id=%s
+) AS bounded_projection LIMIT 2'''
+            q2 = '''SELECT * FROM (
+SELECT user_id,coalesce(raw->>'billingEngine',''),
+       coalesce(raw->>'personalPointAccountId',''),coalesce(raw->>'personalPointReservationId',''),
+       (jsonb_typeof(raw)='object'
+        AND NOT EXISTS (SELECT 1 FROM jsonb_each(raw) f
+          WHERE f.key IN ('billingEngine','personalPointAccountId','personalPointReservationId')
+            AND jsonb_typeof(f.value)<>'string')
+        AND (NOT (raw ? 'id') OR raw->>'id'=id)
+        AND (NOT (raw ? 'userId') OR raw->>'userId'=user_id)
+        AND billing_status IN ('UNQUOTED','QUOTED','RESERVED','CAPTURED','RELEASED','REFUNDED','BILLING_FAILED')
+        AND point_cost>0 AND point_cost<=9007199254740991 AND reserved_points>0)
+FROM public.xz_generation_tasks WHERE id=%s
+) AS bounded_projection LIMIT 2'''
+            q3 = '''SELECT * FROM (
+SELECT id,account_id,user_id,task_id,reference_type,reference_id,entry_type,
+       idempotency_key,points,
+       (jsonb_typeof(metadata)='object'
+        AND (NOT (metadata ? 'legacy_ledger_id') OR
+             (jsonb_typeof(metadata->'legacy_ledger_id')='string' AND btrim(metadata->>'legacy_ledger_id',%s)<>''))
+        AND idempotency_key IN (
+          'personal-point:legacy-wallet:' || %s || ':' || %s || ':' || entry_type ||
+             CASE WHEN NOT (metadata ? 'legacy_ledger_id') THEN '' ELSE ':' || btrim(metadata->>'legacy_ledger_id',%s) END,
+          'personal-point:legacy-wallet:' || %s || ':' || btrim(metadata->>'legacy_ledger_id',%s) || ':' || btrim(metadata->>'legacy_ledger_id',%s))),
+       (metadata ? 'legacy_ledger_id'),
+       (tenant_id IS NULL OR tenant_id IN ('','tenant_default'))
+FROM public.xz_wallet_ledger
+WHERE task_id=%s OR reference_id=%s OR idempotency_key=ANY(%s)
+ORDER BY id COLLATE "C"
+) AS bounded_projection LIMIT 10001'''
+            e1 = 'SELECT * FROM (SELECT tenant_id,point_balance,frozen_points,status FROM public.xz_tenant_wallets WHERE tenant_id=%s) AS bounded_projection LIMIT 2'
+            e2 = '''SELECT * FROM (
+SELECT (coalesce(billing_account_id,'')=%s
+        AND (NOT (params ? 'billing_account_id') OR
+             (jsonb_typeof(params->'billing_account_id')='string' AND params->>'billing_account_id'=%s))
+        AND (NOT (raw ? 'billingAccountId') OR
+             (jsonb_typeof(raw->'billingAccountId')='string' AND raw->>'billingAccountId'=%s)))
+FROM public.xz_generation_tasks WHERE id=%s
+) AS bounded_projection LIMIT 2'''
+            def rows_sql(table, pred, schema):
+                fields = ','.join('CASE WHEN "%s" IS NULL THEN NULL ELSE encode(public.digest(convert_to("%s"::text,\'UTF8\'),\'sha256\'),\'hex\') END' % (c[0], c[0]) for c in schema[table])
+                return 'SELECT * FROM (SELECT ' + fields + ' FROM public.' + table + ' WHERE ' + pred + ') AS bounded_projection LIMIT 10001'
+            e3 = rows_sql('xz_tenant_wallets', 'tenant_id=%s', self.live.core.ENTERPRISE_FINANCIAL_SCHEMA)
+            e4 = rows_sql('xz_wallet_ledger', 'task_id=%s', self.live.core.FINANCIAL_SCHEMA)
+            e5 = rows_sql('xz_billing_lifecycle_events', 'task_id=%s', self.live.core.FINANCIAL_SCHEMA)
+            e6 = '''SELECT * FROM (
+SELECT id,(user_id=%s AND tenant_id=%s
+           AND task_id=%s AND idempotency_key=task_id || ':' || event_type
+           AND event_type IN ('QUOTE','RESERVE','RELEASE')
+           AND billing_status=CASE event_type WHEN 'QUOTE' THEN 'QUOTED' WHEN 'RESERVE' THEN 'RESERVED'
+             WHEN 'RELEASE' THEN 'RELEASED' END)
+FROM public.xz_billing_lifecycle_events WHERE task_id=%s OR idempotency_key=ANY(%s)
+) AS bounded_projection LIMIT 10001'''
+            for q, p in [
+                (q1, (GO_TRIM_SPACE, GO_TRIM_SPACE, 'dummy')),
+                (q2, ('dummy',)),
+                (q3, (GO_TRIM_SPACE, 'u', 'a', GO_TRIM_SPACE, 'u', GO_TRIM_SPACE, GO_TRIM_SPACE, 'dummy', 'dummy', ['dummy'])),
+                (e1, ('t',)),
+                (e2, ('t', 't', 't', 'id')),
+                (e3, ('t',)),
+                (e4, ('id',)),
+                (e5, ('id',)),
+                (e6, ('u', 't', 'id', 'id', ['k'])),
+            ]:
+                cur.execute(q, p)
         self.assertEqual(seen, set(self.transport.QUERY_TYPES), 'fixed-source variant coverage changed')
         self.assertTrue(CANONICAL_MULTISET_QUERIES.issubset(seen))
         self.assertEqual(self.count(), 0)
@@ -606,6 +716,163 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(self.transport.TransportError):
                     self.transport.decode_frame(json.dumps(native.fetchone()[0]).encode(), token, (20,))
 
+    def test_15_historical_native_transport_projection_and_drift(self):
+        drain = load('historical_transport_drain', ROOT / 'ops/verify-safe-drain.py')
+        target = self.target()
+        self.assertTrue(target.history_enabled())
+        # Start from ACTUAL packaged observations; reject protocol, generation,
+        # image and rehashed request-identity substitutions, not fake receipts.
+        for field in ('version', 'generation', 'fingerprint', 'image', 'version-bool', 'version-float', 'protocol-bool', 'protocol-float', 'history-protocol-bool', 'history-protocol-float', 'control-missing', 'control-no-inbox', 'control-no-capture', 'control-no-effects', 'control-protocol-bool', 'control-protocol-float'):
+            bad = json.loads(json.dumps(self.behavior_evidence))
+            if field == 'version':
+                bad['history']['version'] = 2
+            elif field == 'image':
+                bad['identity']['reference'] = 'substituted'
+            elif field in ('version-bool', 'version-float'):
+                bad['history']['version'] = True if field.endswith('bool') else 1.0
+            elif field in ('protocol-bool', 'protocol-float', 'history-protocol-bool', 'history-protocol-float'):
+                key = 'history_protocol' if field.startswith('history-') else 'protocol'
+                bad['history']['observations'][0]['response'][key] = True if field.endswith('bool') else 1.0
+            elif field == 'control-missing':
+                bad['history']['controls'] = []
+            elif field.startswith('control-'):
+                control = bad['history']['controls'][0]
+                if field == 'control-no-inbox':
+                    control['after']['consumer_inbox'] = []
+                elif field == 'control-no-capture':
+                    task = next(t for t in control['after']['xz_generation_tasks'] if t['id'] == control['owner'] + '-normal-control')
+                    task['captured_points'] = 0
+                elif field == 'control-no-effects':
+                    control['effects'] = []
+                else:
+                    control['response']['protocol'] = True if field.endswith('bool') else 1.0
+                control['after_sha256'] = self.capability.sha(self.capability.canonical(control['after']).encode('utf-8'))
+            else:
+                row = bad['history']['observations'][0]
+                execution = next(e for e in row['before']['provider_executions'] if e['status'] == 'succeeded')
+                execution['task_execution_generation' if field == 'generation' else 'request_fingerprint'] = None if field == 'generation' else '0' * 64
+                row['after'] = row['before']
+                row['before_sha256'] = row['after_sha256'] = self.capability.sha(self.capability.canonical(row['before']).encode('utf-8'))
+            with self.assertRaises(self.capability.Refused):
+                self.capability.verify(bad, self.target_ref, self.release, self.behavior_evidence['policy'])
+        # Rehash deliberately truncated ACTUAL full snapshots, including funded
+        # control storage/account/inbox rows; equal hashes cannot bless omissions.
+        for family, checker in (('observations', self.capability.check_history_observation), ('controls', self.capability.check_history_control)):
+            for baseline in self.behavior_evidence['history'][family]:
+                checker(baseline, self.release)
+                for table, rows in baseline['before'].items():
+                    for index, row in enumerate(rows):
+                        for field in row:
+                            bad = json.loads(json.dumps(baseline))
+                            del bad['before'][table][index][field]
+                            bad['before_sha256'] = self.capability.sha(self.capability.canonical(bad['before']).encode('utf-8'))
+                            if family == 'observations':
+                                bad['after'] = bad['before']
+                                bad['after_sha256'] = bad['before_sha256']
+                            with self.subTest(family=family, table=table, field=field), self.assertRaises(self.capability.Refused):
+                                checker(bad, self.release)
+                for table, rows in baseline['after'].items():
+                    for index, row in enumerate(rows):
+                        for field, value in row.items():
+                            if type(value) is not int:
+                                continue
+                            for wrong in (None, True, float(value)):
+                                bad = json.loads(json.dumps(baseline))
+                                bad['after'][table][index][field] = wrong
+                                bad['after_sha256'] = self.capability.sha(self.capability.canonical(bad['after']).encode('utf-8'))
+                                with self.subTest(family=family, table=table, field=field, wrong=wrong), self.assertRaises(self.capability.Refused):
+                                    checker(bad, self.release)
+        for field in ('source', 'expiry'):
+            rejected = self.target()
+            if field == 'source':
+                rejected.proof['deploy_scripts_hash']['ops/verify-safe-drain.py'] = '0' * 64
+            else:
+                rejected.proof['expires_at'] = '2001-01-01T00:00:00Z'
+            with self.assertRaises(self.transport.TransportError):
+                rejected.history_enabled()
+        ids = [entry['execution_id'] for entry in self.fixture.entries]
+        task = self.owner + '-historical'
+        orphan = self.owner + '-orphan'
+        with self.db.cursor() as native:
+            raw = dict(id=task, userId=self.owner, type='TEXT_TO_IMAGE', status='PROCESSING', model='', prompt='', billingAccountType='PERSONAL', params={})
+            native.execute("INSERT INTO xz_generation_tasks(id,user_id,type,model,prompt,status,task_status,execution_generation,worker_id,lease_until,last_heartbeat_at,params,raw) VALUES(%s,%s,'TEXT_TO_IMAGE','','','PROCESSING','DISPATCHING',3,NULL,now()-interval '1 hour',now()-interval '2 hours','{}',%s::jsonb)", (task, self.owner, json.dumps(raw)))
+            native.execute("INSERT INTO provider_executions(task_id,provider,provider_model,capability,attempt,status,error_class,request_fingerprint,task_execution_generation,result_metadata) VALUES(%s,'fixture','fixture','image',1,'succeeded','provider_succeeded',%s,2,'[{\"URL\":\"data:image/png;base64,aGVsbG8=\"}]')", (task, 'a' * 64))
+            native.execute("INSERT INTO provider_executions(task_id,provider,provider_model,capability,attempt,status,error_class,request_fingerprint,task_execution_generation,created_at,updated_at) VALUES(%s,'fixture','fixture','image',1,'failed','definitive_not_submitted',%s,NULL,'2001-01-01','2001-01-02')", (orphan, 'b' * 64))
+            native.execute(self.transport.bind(drain.build_history_sql(ids), ()))
+            expected = native.fetchone()
+        actual = drain.history_observation(target, ids)
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual[0], 0)
+        # Parity rejects the raw terminal branch before its inbox commit can be
+        # treated as immutable history. Fixed source descriptor rejects drift.
+        for tag, value in (('status', 'COMPLETED'), ('id', 'different'), ('type', 'TEXT_TO_VIDEO'), ('params', {'generation_dispatch_mode': 'canary'}), ('Status', 'COMPLETED')):
+            with self.db.cursor() as native:
+                native.execute('UPDATE xz_generation_tasks SET raw=raw||jsonb_build_object(%s,%s::jsonb) WHERE id=%s', (tag, json.dumps(value), task))
+                native.execute(self.transport.bind(drain.build_history_sql(ids), ()))
+                expected = native.fetchone()
+            self.assertGreater(expected[0], 0)
+            self.assertEqual(drain.history_observation(target, ids), expected)
+            with self.db.cursor() as native:
+                native.execute('UPDATE xz_generation_tasks SET raw=%s::jsonb WHERE id=%s', (json.dumps(raw), task))
+        history_tests = load('historical_storage_fixtures', ROOT / 'tests/issue203-historical-drain-test.py')
+        with self.db.cursor() as native:
+            mutations = history_tests.seed_orphan_storage(native, self.owner + '-storage', orphan)
+        self.cli()
+        for sql, parameters in mutations:
+            with self.db.cursor() as native:
+                native.execute(self.transport.bind(drain.build_history_sql(ids), ()))
+                baseline = native.fetchone()
+                native.execute('SELECT to_jsonb(r) FROM public.' + ('xz_multipart_upload_parts' if 'xz_multipart_upload_parts' in sql else sql.split()[1]) + ' r WHERE ' + ('upload_id' if 'xz_multipart_upload_parts' in sql else 'file_id' if 'UPDATE xz_file_objects ' in sql else 'id') + '=%s', parameters)
+                original = native.fetchone()[0]
+                native.execute(sql, parameters)
+                native.execute(self.transport.bind(drain.build_history_sql(ids), ()))
+                expected = native.fetchone()
+            actual = drain.history_observation(target, ids)
+            self.assertEqual(expected, actual)
+            self.assertEqual(baseline[0], actual[0])
+            self.assertNotEqual(baseline[1], actual[1])
+            # Real fixed-transport fresh-drain rejection: change exactly one
+            # owned row between Docker observations, never verifier time/source.
+            def mutate_between_observations(unused):
+                with self.db.cursor() as native:
+                    native.execute(sql, parameters)
+            # Use verify's injectable pause solely as a test fixture driver;
+            # actual native/fixed observations and unchanged Target are used.
+            with self.db.cursor() as native:
+                table = sql.split()[1]
+                field = 'file_size' if table == 'xz_file_objects' else 'name' if table == 'xz_storage_configs' else 'relation_type' if table == 'xz_file_relations' else 'metadata' if table == 'xz_storage_jobs' else 'state' if table == 'xz_multipart_uploads' else 'etag'
+                key = 'file_id' if table == 'xz_file_objects' else 'upload_id' if table == 'xz_multipart_upload_parts' else 'id'
+                native.execute('UPDATE ' + table + ' SET ' + field + '=%s WHERE ' + key + '=%s', (json.dumps(original[field]) if field == 'metadata' else original[field], parameters[0]))
+                if table == 'xz_storage_jobs':
+                    native.execute('UPDATE xz_storage_jobs SET status=%s WHERE id=%s', (original['status'], parameters[0]))
+            with self.assertRaisesRegex(drain.GateError, 'fresh drain required'):
+                drain.verify(str(self.compose), str(self.env), 0, target=target, pause=mutate_between_observations, manifest_path=str(self.manifest), release_sha=self.release, expected_manifest_sha256=hashlib.sha256(self.manifest.read_bytes()).hexdigest())
+        before_unlinked = drain.history_observation(target, ids)
+        with self.db.cursor() as native:
+            native.execute("UPDATE xz_storage_jobs SET status='COMPLETED' WHERE id=%s", (self.owner + '-storage-unlinked-job',))
+            native.execute('UPDATE xz_file_objects SET file_size=6 WHERE file_id=%s', (self.owner + '-storage-unlinked',))
+            native.execute(self.transport.bind(drain.build_history_sql(ids), ()))
+            self.assertEqual(native.fetchone(), before_unlinked)
+        self.assertEqual(drain.history_observation(target, ids), before_unlinked)
+        self.cli()
+        with self.db.cursor() as native:
+            native.execute('UPDATE xz_generation_tasks SET worker_id=%s WHERE id=%s', ('fixture-changed-owner', task))
+        drift = drain.history_observation(target, ids)
+        self.assertEqual(drift[0], actual[0])
+        self.assertNotEqual(drift[1], actual[1])
+        # Source ClaimTx's real unbound NULL-metadata shape must block through
+        # the fixed psql projection, without hashing unrelated normal work.
+        event = self.owner + '-unbound-normal'
+        with self.db.cursor() as native:
+            native.execute("INSERT INTO consumer_inbox(consumer_name,event_id) VALUES('generation-image-normal-worker',%s)", (event,))
+        pending = drain.history_observation(target, ids)
+        self.assertEqual(pending[0], 1)
+        self.assertEqual(pending[1], drift[1])
+        with self.db.cursor() as native:
+            native.execute("UPDATE consumer_inbox SET processed_at=now(),result='completed' WHERE event_id=%s", (event,))
+        self.assertEqual(drain.history_observation(target, ids), drift)
+        self.assertEqual(self.count(), 0)
+
 
 def host():
     frozen()
@@ -613,10 +880,16 @@ def host():
     owner = uuid.uuid4().hex
     log_path = EVIDENCE / (owner + '.log')
     clean = {k: v for k, v in os.environ.items() if not k.startswith(('XIANZHI_TEST_', 'POSTGRES_', 'PG', 'DOCKER_'))}
-    clean['DOCKER_CONTEXT'] = 'desktop-linux'
-    endpoint = command(['docker', 'context', 'inspect', 'desktop-linux', '--format', '{{.Endpoints.docker.Host}}'], env=clean)
-    if endpoint != 'npipe:////./pipe/dockerDesktopLinuxEngine':
-        raise RuntimeError('refuse nonlocal Docker endpoint')
+    if os.name == 'nt':
+        clean['DOCKER_CONTEXT'] = 'desktop-linux'
+        endpoint = command(['docker', 'context', 'inspect', 'desktop-linux', '--format', '{{.Endpoints.docker.Host}}'], env=clean)
+        if endpoint != 'npipe:////./pipe/dockerDesktopLinuxEngine':
+            raise RuntimeError('refuse nonlocal Docker endpoint')
+    else:
+        endpoint = 'unix:///var/run/docker.sock'
+        if not Path('/var/run/docker.sock').is_socket():
+            raise RuntimeError('local Linux Docker socket required')
+        clean['DOCKER_HOST'] = endpoint
     with socket.socket() as sock:
         if sock.connect_ex(('127.0.0.1', 5432)) == 0:
             raise RuntimeError('host localhost5432 must not listen')
@@ -642,15 +915,31 @@ def host():
                                  env=clean, stdout=log, stderr=log, timeout=900)
             result = run.returncode
     finally:
+        # Persist runner observations before removing only this UUID's resources.
+        inspect = subprocess.run(['docker', 'inspect', container], env=clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        if inspect.returncode == 0:
+            info = json.loads(inspect.stdout)[0]
+            if info.get('Config', {}).get('Labels', {}).get(LABEL) != owner:
+                raise RuntimeError('runner ownership changed')
+            copied = subprocess.run(['docker', 'cp', container + ':/work', str(EVIDENCE / (owner + '-work'))], env=clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            if copied.returncode and result == 0:
+                result = 1
         # Only this UUID's labels qualify; inherited service/DB variables ignored.
         for kind, listing, remove in [('container', ['ps', '-aq'], ['rm', '-f', '-v']),
                                       ('network', ['network', 'ls', '-q'], ['network', 'rm']),
                                       ('image', ['image', 'ls', '-q'], ['image', 'rm'])]:
             ids = command(['docker'] + listing + ['--filter', 'label=' + LABEL + '=' + owner], env=clean).splitlines()
             for resource in set(ids):
-                subprocess.run(['docker'] + remove + [resource], env=clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                removed = subprocess.run(['docker'] + remove + [resource], env=clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                if removed.returncode:
+                    result = 1
         frozen()
         print('EVIDENCE ' + str(log_path))
+    output = log_path.read_text(errors='replace')
+    if ('TRANSPORT_RESULT tests=15 failures=0 errors=0 skipped=0' not in output or
+            'FULL_PACKAGED_RESULT roles=2 blocked=2 allowed=2 unavailable=6 history=2 funded_controls=2 budget=300 NONOFFICIAL' not in output):
+        result = 1
+    (EVIDENCE / (owner + '-result.json')).write_text(json.dumps(dict(fixture_nonofficial=True, exit_code=result, log=str(log_path), hard_host_seconds=900)))
     return result
 
 
@@ -658,6 +947,6 @@ if __name__ == '__main__':
     if sys.argv[1:] == ['--inside']:
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(TransportTests))
         print('TRANSPORT_RESULT tests=%d failures=%d errors=%d skipped=%d' % (result.testsRun, len(result.failures), len(result.errors), len(result.skipped)), flush=True)
-        sys.exit(0 if result.wasSuccessful() and result.testsRun == 14 and not result.skipped else 1)
+        sys.exit(0 if result.wasSuccessful() and result.testsRun == 15 and not result.skipped else 1)
     else:
         sys.exit(host())

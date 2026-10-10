@@ -110,6 +110,21 @@ func (a *api) processGenerationImageMessage(ctx context.Context, inbox *messagin
 		_ = tx.Rollback()
 		return messaging.Permanent(fmt.Errorf("generation task %s dispatch protocol mismatch expected=%s actual=%s", taskID, mode, taskMode))
 	}
+	// A stale succeeded image must reject before committing even the inbox
+	// claim. Ownership fencing later in orchestration is too late for transport.
+	// The task row is already locked; NULL/equal/future and failed bindings keep
+	// their existing semantics rather than becoming historical exemptions.
+	var bound sql.NullInt64
+	var executionStatus string
+	err = tx.QueryRowContext(shortCtx, `SELECT task_execution_generation,status FROM provider_executions WHERE task_id=$1 AND capability='image' AND attempt=1 AND (SELECT count(*) FROM provider_executions WHERE task_id=$1)=1`, taskID).Scan(&bound, &executionStatus)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return err
+	}
+	if err == nil && isRunningGenerationTaskStatus(task.Status) && executionStatus == "succeeded" && bound.Valid && bound.Int64 > 0 && task.fencingGeneration() > bound.Int64 {
+		_ = tx.Rollback()
+		return fmt.Errorf("%w: durable image success belongs to older generation", ErrFencedStaleExecution)
+	}
 	if !isRunningGenerationTaskStatus(task.Status) {
 		if err := inbox.CompleteTx(shortCtx, tx, consumerName, envelope.EventID, "completed", map[string]any{"task_id": taskID, "terminal": true}); err != nil {
 			_ = tx.Rollback()

@@ -164,6 +164,63 @@ jobs:
           bash -n ops/run-migrations.sh
           node --test tests/schema-consistency.test.mjs
 
+  safe-drain-packaged-transport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact draft PR source
+        uses: actions/checkout@v4
+
+      - name: Setup Go for actual ALL4 final-source Linux binaries
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend-go/go.mod
+          cache-dependency-path: backend-go/go.sum
+
+      - name: Pull fixture tooling (not behavior proof)
+        run: |
+          set -euo pipefail
+          unset DOCKER_CONTEXT DOCKER_HOST DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+          docker --host unix:///var/run/docker.sock pull registry:2
+          docker --host unix:///var/run/docker.sock pull pgvector/pgvector:pg16
+          docker --host unix:///var/run/docker.sock pull python:3.6-alpine
+          docker --host unix:///var/run/docker.sock pull python:3.6.8-alpine
+          docker --host unix:///var/run/docker.sock pull alpine:3.20
+
+      - name: Mandatory actual packaged both-role strict300 plus Python3.6.8 full transport (host900, zero skips)
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 tests/issue203-safe-drain-ci.py
+
+      - name: Preserve actual NONOFFICIAL identity, phase logs, full snapshots and results even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safe-drain-packaged-transport-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .evidence/issue203/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  safe-drain-required:
+    # Configure this stable check as required on the parent draft PR. It cannot
+    # succeed if any full packaged, Linux race or cold contract job was skipped.
+    if: always()
+    needs: [safe-drain-packaged-transport, backend-go, production-contract]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All mandatory full jobs must actually pass
+        env:
+          PACKAGED: ${{ needs.safe-drain-packaged-transport.result }}
+          BACKEND_RACE: ${{ needs.backend-go.result }}
+          COLD_CONTRACT: ${{ needs.production-contract.result }}
+        run: |
+          set -euo pipefail
+          test "$PACKAGED" = success
+          test "$BACKEND_RACE" = success
+          test "$COLD_CONTRACT" = success
+
   backend-go:
     runs-on: ubuntu-latest
     env:
@@ -276,10 +333,17 @@ jobs:
         working-directory: backend-go
         env:
           ISSUE190_REQUIRE_POSTGRES: "1"
+          HISTORICAL_IMAGE_REQUIRE_POSTGRES: "1"
+          HISTORICAL_DRAIN_REQUIRE_POSTGRES: "1"
         run: |
           set -euo pipefail
           go test -race -count=1 -timeout 5m -json ./internal/httpserver -run '^TestIssue190Postgres(A|B|C|D|E|Connector)$' | tee issue190-postgres.json
           python3 ../tests/assert-issue190-integration.py issue190-postgres.json
+          go test -race -count=1 -timeout 5m -json ./internal/httpserver -run '^TestHistoricalImage(SucceededExecutionFencesPostgres|SucceededCompatibilityPostgres|LiveOwnerAndUnknownControlsPostgres|ConsumerTransportPostgres)$' | tee historical-image-postgres.json
+          python3 ../tests/issue203-historical-drain-test.py --assert-go historical-image-postgres.json
+          python3 -m venv "$RUNNER_TEMP/historical-drain-venv"
+          "$RUNNER_TEMP/historical-drain-venv/bin/pip" install psycopg2-binary==2.9.11
+          "$RUNNER_TEMP/historical-drain-venv/bin/python" ../tests/issue203-historical-drain-test.py
 
       - name: Test Batch A provider recovery (uncached)
         working-directory: backend-go
@@ -305,4 +369,4 @@ jobs:
 
       - name: Test backend (uncached)
         working-directory: backend-go
-        run: go test -count=1 ./...
+        run: go test -p 1 -count=1 ./...
