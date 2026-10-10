@@ -1,0 +1,246 @@
+{
+  "history": [
+    "provider_executions|16|101bb0514f8ecf425f3c53cff99bbfa9",
+    "xz_generation_tasks|15|bbec255923c79c1a0c030a067fa66076",
+    "xz_personal_point_reservations|13|f78c6b09be8a703c7b2af044618df613",
+    "xz_wallet_ledger|25|d044a2ccc3795c909c0385211a8f7eb5",
+    "xz_billing_lifecycle_events|41|812549c46960edeedfb124db415f5013",
+    "xz_billing_events|0|d41d8cd98f00b204e9800998ecf8427e",
+    "xz_assets|0|d41d8cd98f00b204e9800998ecf8427e"
+  ],
+  "quarantine_records": [
+    {
+      "approval_id": "appr-9ad46cc4d0a94cd8-1",
+      "attempt": 1,
+      "created_at": "2026-10-10T17:01:03.627606+00:00",
+      "evidence_sha256": "f0ffca0ec0527746bdeb4a1cbdaa1718312c6dd4326201505e0935d0b753b80f",
+      "execution_id": 1,
+      "expires_at": "2026-10-10T17:01:26+00:00",
+      "generation": null,
+      "not_before": "2026-10-10T16:01:20.967028+00:00",
+      "release_sha": "b749a9ad1e543ac2f0b272aaac1db9b56065c85b",
+      "snapshot_sha256": "52abcc58f476cdbdf4fc749497ba3ff21dd1a7a35233670d39da9eb1636bb5d6",
+      "task_id": "task_000221"
+    },
+    {
+      "approval_id": "appr-9ad46cc4d0a94cd8-12",
+      "attempt": 1,
+      "created_at": "2026-10-10T17:01:03.627606+00:00",
+      "evidence_sha256": "115f8d1d19ee393c9b798c2474e54411656312877c832df7e847810cf56137c0",
+      "execution_id": 12,
+      "expires_at": "2026-10-10T17:01:26+00:00",
+      "generation": null,
+      "not_before": "2026-10-10T16:01:20.967028+00:00",
+      "release_sha": "b749a9ad1e543ac2f0b272aaac1db9b56065c85b",
+      "snapshot_sha256": "cc2d7ee1e99cf70579e240b76f6041b450aba78b5c2f8cecfe5b134b362ea0af",
+      "task_id": "task_000232"
+    },
+    {
+      "approval_id": "appr-9ad46cc4d0a94cd8-14",
+      "attempt": 1,
+      "created_at": "2026-10-10T17:01:03.627606+00:00",
+      "evidence_sha256": "8920ce0d91810d4b66322988e590a9fb6ac7e7967f6ecf1aa77f8966445119fe",
+      "execution_id": 14,
+      "expires_at": "2026-10-10T17:01:26+00:00",
+      "generation": null,
+      "not_before": "2026-10-10T16:01:20.967028+00:00",
+      "release_sha": "b749a9ad1e543ac2f0b272aaac1db9b56065c85b",
+      "snapshot_sha256": "bde82581192904ad72bccfdbdc7f7bb17dc6158d0f8c9721154f39bad2efc488",
+      "task_id": "task_000234"
+    },
+    {
+      "approval_id": "appr-9ad46cc4d0a94cd8-22",
+      "attempt": 1,
+      "created_at": "2026-10-10T17:01:03.627606+00:00",
+      "evidence_sha256": "977b0bfe8ce74947cffa3f56cc8e746828a347b458ab6cea9e2632dd318244a7",
+      "execution_id": 22,
+      "expires_at": "2026-10-10T17:01:26+00:00",
+      "generation": null,
+      "not_before": "2026-10-10T16:01:20.967028+00:00",
+      "release_sha": "b749a9ad1e543ac2f0b272aaac1db9b56065c85b",
+      "snapshot_sha256": "a89962a97cf8c15ad54133ac1c8c703295bf56bb61f38d32a49261473f7e6964",
+      "task_id": "task_000242"
+    },
+    {
+      "approval_id": "appr-9ad46cc4d0a94cd8-25",
+      "attempt": 1,
+      "created_at": "2026-10-10T17:01:03.627606+00:00",
+      "evidence_sha256": "7ddbff1865dc71ffe243257269d8121a49a3051e5a6e1b07dc9f261efed8362f",
+      "execution_id": 25,
+      "expires_at": "2026-10-10T17:01:26+00:00",
+      "generation": null,
+      "not_before": "2026-10-10T16:01:20.967028+00:00",
+      "release_sha": "b749a9ad1e543ac2f0b272aaac1db9b56065c85b",
+      "snapshot_sha256": "88b65d2e0467c9467374c880f2b887c923ea8160195dbdb60c933eb0d3fae6cb",
+      "task_id": "task_000245"
+    },
+    {
+      "approval_id": "appr-9ad46cc4d0a94cd8-31",
+      "attempt": 1,
+      "created_at": "2026-10-10T17:01:03.627606+00:00",
+      "evidence_sha256": "0a11ee45bc6a85ae3fe8a6f470f603e4a1ba6da69745cd4c59094e5ae9a40c9d",
+      "execution_id": 31,
+      "expires_at": "2026-10-10T17:01:26+00:00",
+      "generation": null,
+      "not_before": "2026-10-10T16:01:20.967028+00:00",
+      "release_sha": "b749a9ad1e543ac2f0b272aaac1db9b56065c85b",
+      "snapshot_sha256": "5f0e7e3d1800247ed8e8809d952dae5aa3096fc92cc437d34d03f3ebd03a4807",
+      "task_id": "task_000251"
+    },
+    {
+      "approval_id": "appr-9ad46cc4d0a94cd8-100",
+      "attempt": 1,
+      "created_at": "2026-10-10T17:01:03.627606+00:00",
+      "evidence_sha256": "4170ac81b5b9f794eb9b46ca03eaaa402f08a803f4c545e6e798f17a08361001",
+      "execution_id": 100,
+      "expires_at": "2026-10-10T17:01:26+00:00",
+      "generation": 2,
+      "not_before": "2026-10-10T16:01:20.967028+00:00",
+      "release_sha": "b749a9ad1e543ac2f0b272aaac1db9b56065c85b",
+      "snapshot_sha256": "37cae9f91ae8f50c3001a54069de0aee48c56e7de1a5aa61e59b7f41c77498ed",
+      "task_id": "task_000321"
+    },
+    {
+      "approval_id": "appr-9ad46cc4d0a94cd8-102",
+      "attempt": 1,
+      "created_at": "2026-10-10T17:01:03.627606+00:00",
+      "evidence_sha256": "4d7182c9da71718f3b7ac97106df1100eb1fd54e032f676fff1709326a7a3869",
+      "execution_id": 102,
+      "expires_at": "2026-10-10T17:01:26+00:00",
+      "generation": 2,
+      "not_before": "2026-10-10T16:01:20.967028+00:00",
+      "release_sha": "b749a9ad1e543ac2f0b272aaac1db9b56065c85b",
+      "snapshot_sha256": "1eaf91614ae31df94978ed6617c26fff36440fcf0e098f05dd7c84abb65e664c",
+      "task_id": "task_000323"
+    },
+    {
+      "approval_id": "appr-9ad46cc4d0a94cd8-103",
+      "attempt": 1,
+      "created_at": "2026-10-10T17:01:03.627606+00:00",
+      "evidence_sha256": "4c7a733646f71c4fd207618256978ad8c4e89eab6e764eafa476f0e7d0da3150",
+      "execution_id": 103,
+      "expires_at": "2026-10-10T17:01:26+00:00",
+      "generation": 2,
+      "not_before": "2026-10-10T16:01:20.967028+00:00",
+      "release_sha": "b749a9ad1e543ac2f0b272aaac1db9b56065c85b",
+      "snapshot_sha256": "2f58472fd2196313e7cc17ca6a32a96596b510b01a0f73c30a90fbade468c723",
+      "task_id": "task_000324"
+    }
+  ],
+  "services": {
+    "disk-monitor": {
+      "cid": "48f7b667b4908f8dd7c3ea7ef14cee2ac13c93d2f3b8c38bd78cc4edeba2a341",
+      "exit_code": 137,
+      "finished_at": "2026-10-10T17:04:36.978745055Z",
+      "health": "unhealthy",
+      "image_id": "sha256:bf8527eb54c3680e728d5b4b383a8ba730d72dae7236fbc8dff97ed6b224a731",
+      "image_reference": "alpine:3.20",
+      "restart": "no",
+      "running": false,
+      "started_at": "2026-10-10T17:01:24.26867795Z",
+      "status": "exited"
+    },
+    "migrate": {
+      "cid": "5f71a12ed558fc26f1d22d11e9ca5d9c7108449f3d8091ed1729cf97900947a0",
+      "exit_code": 0,
+      "finished_at": "2026-10-10T17:01:25.169229336Z",
+      "health": null,
+      "image_id": "sha256:81bd698b4594e751a3269e4dcd3e03a4a0ec0daf7b72e7aa1abd43cce9887542",
+      "image_reference": "postgres:16-alpine",
+      "restart": "no",
+      "running": false,
+      "started_at": "2026-10-10T17:01:24.823854339Z",
+      "status": "exited"
+    },
+    "minio": {
+      "cid": "bc8623810acdb0ee55771af364e23f53037a0da9805dd7063a578bac1c23dcb6",
+      "exit_code": 0,
+      "finished_at": "0001-01-01T00:00:00Z",
+      "health": "healthy",
+      "image_id": "sha256:69b2ec208575b69597784255eec6fa6a2985ee9e1a47f4411a51f7f5fdd193a9",
+      "image_reference": "minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
+      "restart": "unless-stopped",
+      "running": true,
+      "started_at": "2026-08-13T20:41:09.518371713Z",
+      "status": "running"
+    },
+    "postgres": {
+      "cid": "ce60f22d15171cf9cda527364107fbd79243fda1527fec774eb8a9b8289ecb74",
+      "exit_code": 0,
+      "finished_at": "0001-01-01T00:00:00Z",
+      "health": "healthy",
+      "image_id": "sha256:5fa1d4c74299c466a1a051ed66ce7a44b69cf27b66444a202f7e5592963ed596",
+      "image_reference": "pgvector/pgvector:pg16",
+      "restart": "unless-stopped",
+      "running": true,
+      "started_at": "2026-08-13T20:41:09.606806421Z",
+      "status": "running"
+    },
+    "postgres-backup": {
+      "cid": "66e812ac54c4e5ec0ef15c820ee38d8e9ba670358d278b7481429ff8281632fc",
+      "exit_code": 130,
+      "finished_at": "2026-10-10T17:02:05.678144Z",
+      "health": null,
+      "image_id": "sha256:81bd698b4594e751a3269e4dcd3e03a4a0ec0daf7b72e7aa1abd43cce9887542",
+      "image_reference": "postgres:16-alpine",
+      "restart": "no",
+      "running": false,
+      "started_at": "2026-10-10T17:01:24.803328895Z",
+      "status": "exited"
+    },
+    "rabbitmq": {
+      "cid": "c03270949c2cf69b8c06a72872052b4d6f18964ede7d78d51b206dc1248c213a",
+      "exit_code": 0,
+      "finished_at": "0001-01-01T00:00:00Z",
+      "health": "healthy",
+      "image_id": "sha256:1031d41f3f1611f61f0fe9011e26201967f460f93f96f92d5be0e823d59e7541",
+      "image_reference": "rabbitmq:3-management-alpine",
+      "restart": "unless-stopped",
+      "running": true,
+      "started_at": "2026-08-13T20:41:09.642598079Z",
+      "status": "running"
+    },
+    "redis": {
+      "cid": "82ed762074ab6444a54c61145f9d3b298bbe56faa0a1081341d08123332732fe",
+      "exit_code": 0,
+      "finished_at": "0001-01-01T00:00:00Z",
+      "health": "healthy",
+      "image_id": "sha256:487efc0616382465781b8fdc3d6d1db449e6fd80ae23bf48432a2da6b6929908",
+      "image_reference": "redis:7-alpine",
+      "restart": "unless-stopped",
+      "running": true,
+      "started_at": "2026-08-13T20:41:09.61579039Z",
+      "status": "running"
+    },
+    "smartvideo-worker": {
+      "cid": "f0660b62d7bbb22011e1fe4a8e7e260beda01401b26960766048008e79c644ae",
+      "exit_code": 0,
+      "finished_at": "2026-10-10T17:02:36.718461393Z",
+      "health": "unhealthy",
+      "image_id": "sha256:3955f86a32d12e68e478c70536607455546885fa07f730a6f5c9089cd0fbf2da",
+      "image_reference": "crpi-kvtl7houjvj5ftba.cn-hangzhou.personal.cr.aliyuncs.com/zhiqiyun-ai/zhiqiyun-ai@sha256:6ca5046ac2bd53b4ee7e5b96bab5bb04cd8d308d8a292d4fd2004bc75609390b",
+      "repo_digests": [
+        "crpi-kvtl7houjvj5ftba.cn-hangzhou.personal.cr.aliyuncs.com/zhiqiyun-ai/zhiqiyun-ai@sha256:6ca5046ac2bd53b4ee7e5b96bab5bb04cd8d308d8a292d4fd2004bc75609390b"
+      ],
+      "restart": "no",
+      "running": false,
+      "started_at": "2026-10-10T17:01:25.554999543Z",
+      "status": "exited"
+    },
+    "xianzhi-ai": {
+      "cid": "2689361d4c264589a8f586ae790581a19c4b734dc957aa4fb2a25528fee31b44",
+      "exit_code": 0,
+      "finished_at": "2026-10-10T17:02:36.089889102Z",
+      "health": "unhealthy",
+      "image_id": "sha256:3955f86a32d12e68e478c70536607455546885fa07f730a6f5c9089cd0fbf2da",
+      "image_reference": "crpi-kvtl7houjvj5ftba.cn-hangzhou.personal.cr.aliyuncs.com/zhiqiyun-ai/zhiqiyun-ai@sha256:6ca5046ac2bd53b4ee7e5b96bab5bb04cd8d308d8a292d4fd2004bc75609390b",
+      "repo_digests": [
+        "crpi-kvtl7houjvj5ftba.cn-hangzhou.personal.cr.aliyuncs.com/zhiqiyun-ai/zhiqiyun-ai@sha256:6ca5046ac2bd53b4ee7e5b96bab5bb04cd8d308d8a292d4fd2004bc75609390b"
+      ],
+      "restart": "no",
+      "running": false,
+      "started_at": "2026-10-10T17:01:25.592209422Z",
+      "status": "exited"
+    }
+  }
+}
