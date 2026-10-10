@@ -217,8 +217,9 @@ def query_types(sql):
     # Other SQL changes (including column names/expressions) change the digest.
     text = re.sub(r' AND e\.id NOT IN \([0-9]+(?:,[0-9]+)*\)',
                   ' AND e.id NOT IN (<execution_ids>)', text)
-    text = text.replace('%%', '%')
     expected = QUERY_TYPES.get(hashlib.sha256(text.encode('utf-8')).hexdigest())
+    if expected is None:
+        expected = QUERY_TYPES.get(hashlib.sha256(text.replace('%%', '%').encode('utf-8')).hexdigest())
     if expected is None:
         block()
     return expected

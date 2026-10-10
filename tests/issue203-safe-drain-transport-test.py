@@ -205,7 +205,9 @@ class TransportTests(unittest.TestCase):
         files = ['deploy.sh', 'rollback.sh', 'ops/verify-release-manifest.sh', 'ops/disk-guard.sh',
                  'ops/run-migrations.sh', 'ops/prestage-release.sh', 'ops/verify-prestage-proof.sh',
                  'ops/verify-release-runtime.py', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py',
-                 'ops/quarantine-approval.py', 'ops/quarantine-live-snapshot.py', 'ops/quarantine-psql-transport.py',
+                 'ops/quarantine-approval.py', 'ops/create-quarantine-candidate.py',
+                 'ops/quarantine-approval/registry.json',
+                 'ops/quarantine-live-snapshot.py', 'ops/quarantine-psql-transport.py',
                  'ops/verify-image-quarantine-capability.py', 'ops/first-upgrade-cold.py',
                  'ops/auto_monitor_killswitch.py']
         config = json.loads(command(self.cmd + ['config', '--format', 'json']))
@@ -480,7 +482,11 @@ class TransportTests(unittest.TestCase):
                 test.assertEqual(len(actual), len(expected))
                 fingerprint = hashlib.sha256(test.transport.re.sub(
                     r' AND e\.id NOT IN \([0-9]+(?:,[0-9]+)*\)',
-                    ' AND e.id NOT IN (<execution_ids>)', sql.strip().rstrip(';')).replace('%%', '%').encode()).hexdigest()
+                    ' AND e.id NOT IN (<execution_ids>)', sql.strip().rstrip(';')).encode()).hexdigest()
+                if fingerprint not in test.transport.QUERY_TYPES:
+                    fingerprint = hashlib.sha256(test.transport.re.sub(
+                        r' AND e\.id NOT IN \([0-9]+(?:,[0-9]+)*\)',
+                        ' AND e.id NOT IN (<execution_ids>)', sql.strip().rstrip(';')).replace('%%', '%').encode()).hexdigest()
                 left, right = actual, expected
                 if fingerprint in CANONICAL_MULTISET_QUERIES:
                     test.assertTrue(all(oid == 25 for oid in expected_types))
