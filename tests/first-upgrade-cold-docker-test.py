@@ -58,7 +58,8 @@ class DockerTests(unittest.TestCase):
     def setUp(self):
         self.docker = cold.capability.Docker()
         # Do not honor an alternate current Docker context or remote endpoint.
-        self.docker.cli += ['--host', 'unix:///var/run/docker.sock'] if os.name != 'nt' else []
+        if '--host' not in self.docker.cli and os.name != 'nt':
+            self.docker.cli += ['--host', 'unix:///var/run/docker.sock']
         self.docker.text(['info'], timeout=20)  # unavailable daemon is ERROR, not skip
         self.temp = tempfile.TemporaryDirectory(prefix='owned-cold-docker-')
         self.addCleanup(self.temp.cleanup)

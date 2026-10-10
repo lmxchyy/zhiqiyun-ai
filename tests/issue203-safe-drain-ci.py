@@ -81,7 +81,7 @@ def main():
                 if result.returncode:
                     raise RuntimeError('ALL4 source build failed: ' + binary)
             shutil.copyfile(str(ROOT / 'tests/issue203-packaged-ci.Dockerfile'), str(context / 'Dockerfile'))
-            resources.append(('network', docker(['network', 'create', '--internal', '--label', LABEL + '=' + owner, network])))
+            resources.append(('network', docker(['network', 'create', '--label', LABEL + '=' + owner, network])))
             resources.append(('container', docker(['run', '-d', '--pull', 'never', '--name', registry, '--network', network,
                 '--label', LABEL + '=' + owner, '-p', '127.0.0.1::5000', 'registry:2'])))
             obj = owned('container', resources[-1][1])
