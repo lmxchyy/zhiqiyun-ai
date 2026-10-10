@@ -110,8 +110,15 @@ def runtime_policy(model):
     return {"fixture": "prestage-sequencing"}
 def local_id(ref):
     return PREV_ID if ref == PREV_REF else TARGET_ID
-def attest(ref, release_sha, policy):
+def attest(ref, release_sha, policy, include_history=True):
+    if type(include_history) is not bool:
+        raise ValueError("invalid test history selection")
+    # Sequencing fixture has no packaged history extension: always strict.
     return {"fixture": True, "identity": {"reference": ref, "release_sha": release_sha, "local_image_id": local_id(ref)}, "policy": policy}
+def verify_history(evidence, release_sha):
+    if evidence.get("identity", {}).get("release_sha") != release_sha or "history" in evidence:
+        raise ValueError("test history fixture mismatch")
+    return False
 def verify(evidence, ref, release_sha, policy):
     if evidence != {"fixture": True, "identity": {"reference": ref, "release_sha": release_sha, "local_image_id": local_id(ref)}, "policy": policy}:
         raise ValueError("test capability fixture mismatch")

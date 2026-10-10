@@ -163,3 +163,108 @@ release PASS claim.
 - [ ] W*/M*: no frontend/business changes; unrelated regressions not run.
 - [ ] Production health, full recovery isolation and release authorization: not
   performed or established. No production connection, commit, push or PR.
+
+## Optional non-enrolled history protocol (forward fix; not rollout authority)
+
+The current source adds an optional history-protocol-1 challenge to the existing
+packaged API/generation-worker capability evidence. Frozen v1 evidence without
+this extension remains strict. The verified, unexpired official Prestage Proof
+must bind helper/SQL/schema source, release SHA, immutable image and packaged
+binaries; local synthetic images and these regression tests are **not** an
+official Carrier, human approval or permission to release. Rollback capability
+still uses the original challenge, without inheriting this extension.
+
+Only two separately proven shapes can be classified read-only:
+
+* Unique `TEXT_TO_IMAGE`/`IMAGE_TO_IMAGE`, `PROCESSING`/`DISPATCHING`, exactly one
+  attempt-1 succeeded image execution with a well-formed durable image array,
+  positive generations and execution strictly older. Mode is empty, and canary,
+  fair-scheduled and dispatch-owner keys must be **absent**, not false/blank.
+  There is no valid lease, active transport, asset or task result. Owner strings
+  are not eligibility: full arbitrary/null/blank worker, lease and heartbeat
+  bytes remain bound to the evidence.
+* Unique positive attempt-1 failed image orphan, `definitive_not_submitted`,
+  NULL generation, created/updated before migration119, zero task associations,
+  no provider request, result, next check, asset or active transport. NULL is
+  **not** a fence: actual task-rooted entrypaths reject task-not-found before
+  creating an attempt, provider call, persistence or settlement.
+
+A repeatable-read/read-only observation validates exact schemas and task/
+execution identity constraints. It compares canonical digests of classified
+rows and their linked financial, correlation, output-storage and transport
+context, not whole business tables. Unrelated normal in-flight work can finish
+while all global lease, nonterminal, duplicate/identity and transport counters
+remain strict. Same-count historical evidence drift rejects a fresh drain.
+Changes to shared linked financial context conservatively require a fresh drain.
+Pending inbox claims for either actual image consumer independently block the
+optional observation globally, even with NULL metadata and no outbox linkage.
+Task-linked pending inbox evidence also blocks. No age, terminal-task or enrolled
+execution exemption is implied: the terminal consumer branch can complete an
+inbox before the provider quarantine check. Completed unbound markers without
+attribution are outside the historical digest, not certified inert history;
+packaged callback before/after comparisons still observe all fixture inbox rows.
+
+Empty dispatch mode defaults to NORMAL. A pure succeeded-older-positive SELECT
+under the consumer's task lock rolls back its inbox claim before returning
+Fenced; equal/NULL/future/failed paths retain existing behavior. The challenge
+uses matching real request fingerprints, valid envelopes, independent GET/POST
+and storage observation, full fixture DB equality and a separate funded normal
+valid-envelope consumer control per packaged role. This control uses a real
+admitted model/channel against the owned sink (not a sentinel/mock model), and
+requires provider/storage effects, durable output, capture and inbox completion.
+It attests reachable entrypaths only: direct persist/transition primitives are
+not a general historical immutability barrier. Valid-lease checks and sampled
+DB/broker TOCTOU limitations remain; expired leases do not terminate old code.
+No extra enrollment, history repair, provider recovery or DLQ action is added.
+
+Mandatory historical DB/packaged modes require zero skips. Windows does not
+provide the required CGO race toolchain: Ubuntu CI remains a required review gate.
+
+### Bounded evidence-contract corrections (source-ready, validation pending)
+
+The historical-only storage graph roots ALL classified identities, including
+orphans, separately from actual task rows. Bidirectional file relations close
+connected files (including cycles/diamonds with UNION visited-node termination)
+and their referenced configuration, jobs, multipart uploads and parts. A shared
+configuration is hashed when referenced, but does not pull every unrelated file
+in that configuration into the graph. Connected/shared relevant mutations require
+a fresh drain; there is no depth truncation, invented task or generic SQL fallback.
+The shared exact9 approval projector is unchanged.
+
+`generationTaskForUpdate` decodes behavior fields from `raw`: relational running
+status alone is not sufficient. Classification requires exact typed parity for
+id/userId/type/status/model/prompt and object params, plus optional non-overridden
+mapped strings and no case-insensitive competing aliases. Optional NULL/empty
+relational strings permit only absent/empty raw strings, reflecting Go zero
+values. Overridden fencing/task_status/financial fields are not compared with
+obsolete raw copies. The callback's terminal behavior is unchanged: a Go
+counterexample demonstrates its inbox write for raw-terminal/column-running
+rows, which native/fixed classification must reject. `{}` raw cannot certify
+history. All six current production pending claims remain independent blockers.
+
+Optional capability snapshots require exact source-defined table row fieldsets
+and PostgreSQL-compatible types (integer is never bool/float/NULL; nullable
+integer remains explicit NULL). Complete fixture lease/heartbeat/raw/result/error,
+provider identity/results/timestamps and financial/storage/inbox rows are bound,
+not abbreviated equal-hash projections. Rehashed deletion/truncation/type negatives
+cover succeeded/orphan snapshots and funded consumer controls. The real seed and
+snapshot routines are exercised on rolled-back owned PostgreSQL fixtures.
+
+The Ubuntu `safe-drain-packaged-transport` job builds ALL4 actual final-source
+Linux binaries, packages a NONOFFICIAL local fixture image, obtains an immutable
+RepoDigest from a UUID-owned loopback-only registry and records an explicitly
+NONOFFICIAL identity-only/nonbehavior prerequisite. It then runs unchanged strict
+`attest(synthetic=False, include_history=True)` with its 300s budget inside the
+actual Python3.6.8 full transport harness. Disposable HMAC/manifest/Proof fixtures
+never become official Carrier/Proof or human approval. No flag is flipped, no
+verifier branch bypasses synthetic rejection, and no control is omitted. Required
+counts are both roles, blocked/allowed pairs, six unavailable faults, two history
+observations, two funded controls, and all15 transport tests with zero skips.
+Legacy180/synthetic900/host900 limits remain fixed. Owned resources and snapshots
+are retained as CI artifacts on failure; incomplete phases/results/cleanup fail.
+
+Parent must configure `safe-drain-required` as a required draft-PR check. This
+always-run aggregate fails unless packaged/transport, existing backend Linux race
+and existing cold production-contract jobs all actually succeed (not skip/cancel).
+Those actual Ubuntu results remain PENDING; local source checks are not package
+certification, official proof, merge/release approval or pending-inbox exemption.

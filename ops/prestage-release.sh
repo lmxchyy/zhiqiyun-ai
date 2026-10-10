@@ -1016,7 +1016,7 @@ try:
         cold_policy = cold.create_policy(rollback_receipt_path, rollback_receipt_hash, effective_data,
                                         os.path.join(os.path.dirname(rollback_receipt_path), 'cold-compose.json'), capability.Docker())
     else:
-        rollback_capability = capability.attest(rollback_receipt['previous_image_reference'], rollback_receipt['previous_git_sha'], policy)
+        rollback_capability = capability.attest(rollback_receipt['previous_image_reference'], rollback_receipt['previous_git_sha'], policy, include_history=False)
         if rollback_capability['identity']['local_image_id'] != rollback_receipt['previous_image_id']:
             fail('ROLLBACK_CAPABILITY_IMAGE_MISMATCH: restage required')
 except Exception:

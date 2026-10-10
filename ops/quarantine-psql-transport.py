@@ -15,6 +15,7 @@ import re
 import shlex
 import subprocess
 import threading
+import types
 import uuid
 
 MAX_BYTES = 32 * 1024 * 1024
@@ -119,6 +120,7 @@ class Target:
                 proof = json.load(stream)
             if before != digest_file(proof_path):
                 block()
+            self.proof_path, self.proof_sha256, self.proof = proof_path, before, proof
             self.expected = proof['postgres_transport_binding']
             self.image_reference = proof['image_reference']
             self.compose, self.env = compose, env
@@ -128,6 +130,35 @@ class Target:
 
     def check(self):
         if binding(self.compose, self.env, self.image_reference) != self.expected:
+            block()
+
+    def history_enabled(self):
+        # This object was constructed only AFTER official signed Proof/source
+        # verification. Never accept a caller boolean, image tag or synthetic
+        # receipt as authority to subtract historical blockers.
+        try:
+            if digest_file(self.proof_path) != self.proof_sha256:
+                block()
+            root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+            for name, expected in self.proof['deploy_scripts_hash'].items():
+                if digest_file(os.path.join(root, name)) != expected:
+                    block()
+            expiry = self.proof['expires_at']
+            match = re.fullmatch(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,6}))?(?:Z|\+00:00)', expiry)
+            if match is None:
+                block()
+            end = datetime.datetime.strptime(match.group(1), '%Y-%m-%dT%H:%M:%S').replace(tzinfo=datetime.timezone.utc, microsecond=int((match.group(2) or '').ljust(6, '0')))
+            if end <= datetime.datetime.now(datetime.timezone.utc):
+                block()
+            path = os.path.join(root, 'ops/verify-image-quarantine-capability.py')
+            capability = types.ModuleType('historical_capability')
+            capability.__file__ = path
+            with open(path, 'rb') as stream:
+                exec(compile(stream.read(), path, 'exec'), capability.__dict__)
+            evidence = self.proof['runtime_capability']
+            capability.verify(evidence, self.image_reference, self.proof['git_sha'], evidence['policy'])
+            return capability.verify_history(evidence, self.proof['git_sha'])
+        except Exception:
             block()
 
     def connect(self):
@@ -186,6 +217,7 @@ def query_types(sql):
     # Other SQL changes (including column names/expressions) change the digest.
     text = re.sub(r' AND e\.id NOT IN \([0-9]+(?:,[0-9]+)*\)',
                   ' AND e.id NOT IN (<execution_ids>)', text)
+    text = text.replace('%%', '%')
     expected = QUERY_TYPES.get(hashlib.sha256(text.encode('utf-8')).hexdigest())
     if expected is None:
         block()
@@ -490,6 +522,10 @@ QUERY_TYPES = {
     'c4309b3f93c36872684a1dd57ac23493bd06df508cc15ba595ce257539c6e484': (20,),
     # verify-safe-drain.py:build_sql | SELECT (SELECT count(*) FROM public.xz_generation_tasks WHERE lease_until > now() OR status IS NULL OR task_status IS NULL OR upper(status) NOT IN ('COMPLETED','SUCCEEDED','FAILED'
     'eb192946b9b0566787cd39b91df85143b6654cfb1f22a37fb2d532f61d444e83': (20,),
+    # verify-safe-drain.py fixed historical projection and identity keys.
+    'fffc2f157dbe8db61c072fcac74a2ef6833e00546a95f2e91df3d358a288cc6d': (20, 25),
+    '8d8bfec9db665a52c361eefddb67342aebf481c4c62b1f83f6a64534dfe05a43': (20, 25),
+    '7b5ce9c2e098c83c5ccbe6de49a294452524a648203df5b2721ea84fdc02cb18': (19, 25, 25),
 }
 
 class Connection:
