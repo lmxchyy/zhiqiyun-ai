@@ -784,7 +784,7 @@ def check_history_snapshot(snapshot):
                 else:
                     raise Refused('unsupported historical source column type: ' + kind)
                 if valid and kind == 'jsonb' and name in ('raw', 'params', 'metadata', 'policy_snapshot'):
-                    valid = type(value) is dict or (value is None and nullable == 'YES')
+                    valid = type(value) is dict or value is None
                 if valid and table == 'xz_generation_tasks' and name == 'result_ids':
                     valid = type(value) is list and all(type(v) is str for v in value)
                 if not valid:
