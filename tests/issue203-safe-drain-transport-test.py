@@ -183,6 +183,17 @@ class TransportTests(unittest.TestCase):
         cls.approval_tests.ApprovalTests.tearDownClass()
         # Host finally performs independent owner-label-scoped cleanup as well.
 
+    def signed_manifest(self):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        nb = (now - datetime.timedelta(minutes=5)).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        exp = (now + datetime.timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        snapshots = self.live.core.sample_canonical_live_read_only(self.db, self.fixture.entries)
+        cand = self.approval_tests.approval.build_unsigned_candidate(
+            self.fixture.entries, snapshots, self.release, 'synthetic-operator-key', nb, exp, now)
+        return self.approval_tests.approval.approve_candidate(
+            cand, operator_identity='synthetic-operator', approval_id='synthetic-approval',
+            secret=self.secret, now=now)
+
     def setUp(self):
         self.fixture.setUp()
         self.lock_dir = self.work / 'release.lock'
@@ -191,7 +202,7 @@ class TransportTests(unittest.TestCase):
         (self.lock_dir / 'owner_token').write_text('synthetic-owner-token')
         (self.lock_dir / 'release_sha').write_text(self.release)
         os.environ['OWNER_TOKEN'] = 'synthetic-owner-token'
-        self.manifest.write_bytes(self.fixture.signed_canonical(release_sha=self.release))
+        self.manifest.write_bytes(self.signed_manifest())
         self.write_proof()
 
     def write_proof(self):
@@ -551,7 +562,7 @@ class TransportTests(unittest.TestCase):
         finally:
             self.live.core._approval.LEGACY_NULL_IDENTITY_PINS = old_pins
         self.fixture.stored_asset_fixture()
-        self.manifest.write_bytes(self.fixture.signed_canonical(release_sha=self.release))
+        self.manifest.write_bytes(self.signed_manifest())
         with self.db.cursor() as native:
             cur = ComparedCursor(native)
             cur.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
@@ -565,6 +576,80 @@ class TransportTests(unittest.TestCase):
             cur.execute(drain.HISTORY_KEYS_SQL)
             for ids in (None, [901, 902], [9223372036854775807]):
                 cur.execute(drain.build_history_sql(ids))
+            GO_TRIM_SPACE = ' \t\n\r'
+            q1 = '''SELECT * FROM (
+SELECT execution_generation,status,task_status,user_id,tenant_id,
+       jsonb_typeof(result_ids),type,model,
+       (jsonb_typeof(params)='object'
+        AND (NOT (params ? 'billing_scope') OR jsonb_typeof(params->'billing_scope')='string')
+        AND upper(btrim(billing_account_type,%s)) IN ('','PERSONAL')
+        AND upper(btrim(coalesce(params->>'billing_scope',''),%s)) IN ('','PERSONAL'))
+FROM public.xz_generation_tasks WHERE id=%s
+) AS bounded_projection LIMIT 2'''
+            q2 = '''SELECT * FROM (
+SELECT user_id,coalesce(raw->>'billingEngine',''),
+       coalesce(raw->>'personalPointAccountId',''),coalesce(raw->>'personalPointReservationId',''),
+       (jsonb_typeof(raw)='object'
+        AND NOT EXISTS (SELECT 1 FROM jsonb_each(raw) f
+          WHERE f.key IN ('billingEngine','personalPointAccountId','personalPointReservationId')
+            AND jsonb_typeof(f.value)<>'string')
+        AND (NOT (raw ? 'id') OR raw->>'id'=id)
+        AND (NOT (raw ? 'userId') OR raw->>'userId'=user_id)
+        AND billing_status IN ('UNQUOTED','QUOTED','RESERVED','CAPTURED','RELEASED','REFUNDED','BILLING_FAILED')
+        AND point_cost>0 AND point_cost<=9007199254740991 AND reserved_points>0)
+FROM public.xz_generation_tasks WHERE id=%s
+) AS bounded_projection LIMIT 2'''
+            q3 = '''SELECT * FROM (
+SELECT id,account_id,user_id,task_id,reference_type,reference_id,entry_type,
+       idempotency_key,points,
+       (jsonb_typeof(metadata)='object'
+        AND (NOT (metadata ? 'legacy_ledger_id') OR
+             (jsonb_typeof(metadata->'legacy_ledger_id')='string' AND btrim(metadata->>'legacy_ledger_id',%s)<>''))
+        AND idempotency_key IN (
+          'personal-point:legacy-wallet:' || %s || ':' || %s || ':' || entry_type ||
+             CASE WHEN NOT (metadata ? 'legacy_ledger_id') THEN '' ELSE ':' || btrim(metadata->>'legacy_ledger_id',%s) END,
+          'personal-point:legacy-wallet:' || %s || ':' || btrim(metadata->>'legacy_ledger_id',%s) || ':' || btrim(metadata->>'legacy_ledger_id',%s))),
+       (metadata ? 'legacy_ledger_id'),
+       (tenant_id IS NULL OR tenant_id IN ('','tenant_default'))
+FROM public.xz_wallet_ledger
+WHERE task_id=%s OR reference_id=%s OR idempotency_key=ANY(%s)
+ORDER BY id COLLATE "C"
+) AS bounded_projection LIMIT 10001'''
+            e1 = 'SELECT * FROM (SELECT tenant_id,point_balance,frozen_points,status FROM public.xz_tenant_wallets WHERE tenant_id=%s) AS bounded_projection LIMIT 2'
+            e2 = '''SELECT * FROM (
+SELECT (coalesce(billing_account_id,'')=%s
+        AND (NOT (params ? 'billing_account_id') OR
+             (jsonb_typeof(params->'billing_account_id')='string' AND params->>'billing_account_id'=%s))
+        AND (NOT (raw ? 'billingAccountId') OR
+             (jsonb_typeof(raw->'billingAccountId')='string' AND raw->>'billingAccountId'=%s)))
+FROM public.xz_generation_tasks WHERE id=%s
+) AS bounded_projection LIMIT 2'''
+            def rows_sql(table, pred, schema):
+                fields = ','.join('CASE WHEN "%s" IS NULL THEN NULL ELSE encode(public.digest(convert_to("%s"::text,\'UTF8\'),\'sha256\'),\'hex\') END' % (c[0], c[0]) for c in schema[table])
+                return 'SELECT * FROM (SELECT ' + fields + ' FROM public.' + table + ' WHERE ' + pred + ') AS bounded_projection LIMIT 10001'
+            e3 = rows_sql('xz_tenant_wallets', 'tenant_id=%s', self.live.core.ENTERPRISE_FINANCIAL_SCHEMA)
+            e4 = rows_sql('xz_wallet_ledger', 'task_id=%s', self.live.core.FINANCIAL_SCHEMA)
+            e5 = rows_sql('xz_billing_lifecycle_events', 'task_id=%s', self.live.core.FINANCIAL_SCHEMA)
+            e6 = '''SELECT * FROM (
+SELECT id,(user_id=%s AND tenant_id=%s
+           AND task_id=%s AND idempotency_key=task_id || ':' || event_type
+           AND event_type IN ('QUOTE','RESERVE','RELEASE')
+           AND billing_status=CASE event_type WHEN 'QUOTE' THEN 'QUOTED' WHEN 'RESERVE' THEN 'RESERVED'
+             WHEN 'RELEASE' THEN 'RELEASED' END)
+FROM public.xz_billing_lifecycle_events WHERE task_id=%s OR idempotency_key=ANY(%s)
+) AS bounded_projection LIMIT 10001'''
+            for q, p in [
+                (q1, (GO_TRIM_SPACE, GO_TRIM_SPACE, 'dummy')),
+                (q2, ('dummy',)),
+                (q3, (GO_TRIM_SPACE, 'u', 'a', GO_TRIM_SPACE, 'u', GO_TRIM_SPACE, GO_TRIM_SPACE, 'dummy', 'dummy', ['dummy'])),
+                (e1, ('t',)),
+                (e2, ('t', 't', 't', 'id')),
+                (e3, ('t',)),
+                (e4, ('id',)),
+                (e5, ('id',)),
+                (e6, ('u', 't', 'id', 'id', ['k'])),
+            ]:
+                cur.execute(q, p)
         self.assertEqual(seen, set(self.transport.QUERY_TYPES), 'fixed-source variant coverage changed')
         self.assertTrue(CANONICAL_MULTISET_QUERIES.issubset(seen))
         self.assertEqual(self.count(), 0)
