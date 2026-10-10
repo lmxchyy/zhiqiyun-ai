@@ -55,7 +55,10 @@ jobs:
           set -euo pipefail
           mkdir -p .evidence/cold-recovery-resume
           trap 'docker --host unix:///var/run/docker.sock rm -f "cold-resume-ci-$RUNNER_OWNER" >/dev/null 2>&1 || true' EXIT
+          # Match the owned checkout UID; keep Git ownership checks enabled.
+          # The explicit socket group grants only this disposable runner access.
           timeout 900 docker --host unix:///var/run/docker.sock run --rm --pull never \
+            --user "$(id -u):$(id -g)" --group-add "$(stat -c '%g' /var/run/docker.sock)" -e HOME=/tmp \
             --name "cold-resume-ci-$RUNNER_OWNER" --label "org.xianzhi.cold-resume.ci=$RUNNER_OWNER" \
             -v "$PWD:/source" -v /var/run/docker.sock:/var/run/docker.sock -w /source "$RUNNER_TAG" \
             sh -ec 'python3.6 -B tests/cold-recovery-resume-test.py; python3.6 -B tests/cold-recovery-resume-docker-test.py --certify-fixed' \
