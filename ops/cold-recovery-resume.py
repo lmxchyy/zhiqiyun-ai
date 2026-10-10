@@ -404,6 +404,8 @@ def validate_approval(approval, candidate, hold, source):
             value['nonce'] == candidate['nonce'] and value['confirmation'] == phrase(candidate) and
             type(value['operator']) is str and re.fullmatch('[A-Za-z0-9_.@-]{3,80}', value['operator']) and
             type(value['approved_at']) is int and value['approved_at'] == value['not_before'] and
+            candidate['not_before'] <= value['not_before'] and
+            0 < value['expires_at'] - value['not_before'] <= 300 and
             value['expires_at'] <= candidate['expires_at'], 'human approval mismatch')
     return value
 

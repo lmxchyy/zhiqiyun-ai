@@ -183,6 +183,27 @@ class ResumeTests(unittest.TestCase):
         with self.assertRaises(r.Refused):
             self.execute()
 
+    def test_signed_approval_cannot_extend_human_window_or_predate_proof(self):
+        original = r.authenticate(self.a)
+        for duration in (301, 800):
+            with self.subTest(duration=duration):
+                changed = dict(original, expires_at=original['not_before'] + duration)
+                self.a = r.cold.signed(changed)
+                with self.assertRaises(r.Refused):
+                    self.execute()
+                self.assertEqual(self.backend.docker.calls, [])
+                self.assertEqual(r.cold.read_hold(self.directory), self.h)
+        earlier = self.c['not_before'] - 1
+        self.a = r.cold.signed(dict(original, not_before=earlier, approved_at=earlier,
+                                   expires_at=earlier + 300))
+        with self.assertRaises(r.Refused):
+            self.execute()
+        self.assertEqual(self.backend.docker.calls, [])
+        self.assertEqual(r.cold.read_hold(self.directory), self.h)
+        exact = r.cold.signed(dict(original, expires_at=original['not_before'] + 300))
+        self.assertEqual(r.validate_approval(exact, self.c, self.h, source())['expires_at'],
+                         original['not_before'] + 300)
+
     def test_explicit_operator_phrase_no_auto_approval(self):
         for operator, phrase in [('', r.phrase(self.c)), ('root.operator', 'yes'), ('root.operator', r.phrase(self.c).replace(r.APP, 'c' * 40))]:
             with self.assertRaises(r.Refused):
