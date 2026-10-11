@@ -178,6 +178,7 @@ class RealBackendTests(unittest.TestCase):
         secret = uuid.uuid4().hex + uuid.uuid4().hex
         values = {name: secret for name in required}
         values.update(COMPOSE_PROJECT_NAME=self.project, TARGET_PLATFORM='linux/amd64', XIANZHI_IMAGE_REFERENCE=FIXED_REF,
+                      MINIO_IMAGE='docker.m.daocloud.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e',
                       POSTGRES_USER='fixture_admin', POSTGRES_DB='fixture_only', POSTGRES_PASSWORD=secret,
                       REDIS_PASSWORD=secret, RABBITMQ_DEFAULT_USER='fixture_admin', RABBITMQ_DEFAULT_PASS=secret,
                       MINIO_ROOT_USER='fixture_admin', MINIO_ROOT_PASSWORD=secret,

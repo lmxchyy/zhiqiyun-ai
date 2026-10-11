@@ -45,7 +45,7 @@ jobs:
           docker --host unix:///var/run/docker.sock pull postgres:16-alpine
           docker --host unix:///var/run/docker.sock pull redis:7-alpine
           docker --host unix:///var/run/docker.sock pull rabbitmq:3-management-alpine
-          docker --host unix:///var/run/docker.sock pull minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          docker --host unix:///var/run/docker.sock pull --platform linux/amd64 docker.m.daocloud.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
           docker --host unix:///var/run/docker.sock pull alpine:3.20
           docker --host unix:///var/run/docker.sock pull python:3.6-alpine
           docker --host unix:///var/run/docker.sock pull python:3.6.8-alpine
