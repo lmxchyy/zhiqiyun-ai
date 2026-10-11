@@ -310,7 +310,7 @@ class RealBackendTests(unittest.TestCase):
                        "INSERT INTO xz_billing_events(id,task_id,user_id,point_cost,status) VALUES('fixture-billing',%s,'fixture-user',10,'RESERVED');" % q]
         self.sql('\n'.join(statements))
         proof = json.loads(self.sql(
-            "SELECT json_build_object('schema_oid', a.atttypid, 'schema_type', a.atttypid::regtype::text, "
+            "SELECT json_build_object('schema_oid', a.atttypid::bigint, 'schema_type', a.atttypid::regtype::text, "
             "'expression_type', pg_typeof(%s)::text, 'expression_value', %s) "
             "FROM pg_catalog.pg_attribute a WHERE a.attrelid='public.xz_generation_tasks'::regclass "
             "AND a.attname='raw' AND NOT a.attisdropped;" % (raw_expression, raw_expression)))
