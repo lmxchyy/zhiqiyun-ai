@@ -1,6 +1,8 @@
 name: cold-recovery-resume
 
 on:
+  push:
+    branches: ["ci/cold-resume-controlled-97040a"]
   pull_request:
     paths:
       - 'ops/**'
@@ -16,13 +18,13 @@ permissions:
 
 jobs:
   fixed-target-owned-recovery:
-    runs-on: ubuntu-latest
+    runs-on: ["controlled970-9ce567d57cb749d488f7ca2c209acf16"]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: 97040a07c67ab3f4293b2b2a470810c28a064890
       - name: Read fixed official package using ephemeral Actions identity only
         uses: docker/login-action@v3
         with:
