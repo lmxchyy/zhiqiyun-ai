@@ -34,6 +34,8 @@ STARTING = 'RECOVERY_STARTING'
 SUCCESS = 'RECOVERY_API_WORKER_VERIFIED_ANCILLARY_HELD'
 DOMAIN = 'cold-recovery-resume'
 DIR = os.path.join(ROOT, '.prestage')
+PROJECT = 'zhiqiyun-ai-prod'
+ANCHOR_PATH = os.path.join(ROOT, 'ops/cold-recovery-anchor.json')
 COMPOSE = os.path.join(ROOT, 'compose.prod.yml')
 ENV = os.path.join(ROOT, '.env.production')
 PROOF_PATH = os.path.join(DIR, APP, 'prestage-proof.json')
@@ -256,7 +258,7 @@ def read_stopped_hold(directory=DIR):
     require(type(hold.get('version')) is int and hold['version'] == 1 and hold.get('state') == STOPPED,
             'only legal authenticated stopped hold')
     require(hold.get('release_sha') == APP and hold.get('proof_sha256') == OLD_PROOF and
-            hold.get('project') == 'zhiqiyun-ai-prod' and type(hold.get('owner')) is str and hold['owner'] and
+            hold.get('project') == PROJECT and type(hold.get('owner')) is str and hold['owner'] and
             type(hold.get('image_ids')) is list and len(hold['image_ids']) == 2 and
             hold['image_ids'] == [IMAGE, OLD_IMAGE] and
             type(hold.get('proof_nonce')) is str and re.fullmatch('[0-9a-f-]{36}', hold['proof_nonce']),
@@ -322,12 +324,12 @@ def observe(docker, anchor, running=()):
 class Backend:
     def __init__(self):
         self.docker = cap.Docker()
-        self.anchor = read(os.path.join(ROOT, 'ops/cold-recovery-anchor.json'))
+        self.anchor = read(ANCHOR_PATH)
 
     def snapshot(self, running=()):
         model, policy = cap.rendered_policy(self.docker, COMPOSE, ENV, REF)
         require(set(policy['roles']) == set(ROLES), 'unexpected generation roles')
-        require(model['name'] == 'zhiqiyun-ai-prod', 'project mismatch')
+        require(model['name'] == PROJECT, 'project mismatch')
         containers = observe(self.docker, self.anchor, running)
         verify_container_config(self.docker, model, containers, policy)
         runtime.verify_quarantine_barrier_read_only(COMPOSE, ENV, execute=lambda args: self.docker.text(args[1:]))

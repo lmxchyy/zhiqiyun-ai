@@ -42,6 +42,11 @@ jobs:
         run: |
           set -euo pipefail
           docker --host unix:///var/run/docker.sock pull pgvector/pgvector:pg16
+          docker --host unix:///var/run/docker.sock pull postgres:16-alpine
+          docker --host unix:///var/run/docker.sock pull redis:7-alpine
+          docker --host unix:///var/run/docker.sock pull rabbitmq:3-management-alpine
+          docker --host unix:///var/run/docker.sock pull minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          docker --host unix:///var/run/docker.sock pull alpine:3.20
           docker --host unix:///var/run/docker.sock pull python:3.6-alpine
           docker --host unix:///var/run/docker.sock pull python:3.6.8-alpine
           owner="$(cat /proc/sys/kernel/random/uuid)"
@@ -54,23 +59,34 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .evidence/cold-recovery-resume
-          trap 'docker --host unix:///var/run/docker.sock rm -f "cold-resume-ci-$RUNNER_OWNER" >/dev/null 2>&1 || true' EXIT
+          trap 'docker --host unix:///var/run/docker.sock rm -f "cold-resume-ci-$RUNNER_OWNER" >/dev/null 2>&1 || true; python3 -B tests/cold-recovery-resume-cleanup.py' EXIT
           # Match the owned checkout UID; keep Git ownership checks enabled.
           # The explicit socket group grants only this disposable runner access.
+          # Identical host/container checkout paths keep real Compose binds visible
+          # to the daemon. Backend.certify replaces duplicate placeholder-policy
+          # --certify-fixed; full evidence lives in backend/*/certification.json.
           timeout 900 docker --host unix:///var/run/docker.sock run --rm --pull never \
             --user "$(id -u):$(id -g)" --group-add "$(stat -c '%g' /var/run/docker.sock)" -e HOME=/tmp \
             --name "cold-resume-ci-$RUNNER_OWNER" --label "org.xianzhi.cold-resume.ci=$RUNNER_OWNER" \
-            -v "$PWD:/source" -v /var/run/docker.sock:/var/run/docker.sock -w /source "$RUNNER_TAG" \
-            sh -ec 'python3.6 -B tests/cold-recovery-resume-test.py; python3.6 -B tests/cold-recovery-resume-docker-test.py --certify-fixed' \
+            -v "$PWD:$PWD" -v /var/run/docker.sock:/var/run/docker.sock -w "$PWD" "$RUNNER_TAG" \
+            sh -ec 'python3.6 -B tests/cold-recovery-resume-test.py; python3.6 -B tests/cold-recovery-resume-cleanup-test.py; python3.6 -B tests/cold-recovery-resume-request-test.py; python3.6 -B tests/cold-recovery-resume-backend-test.py; python3.6 -B tests/cold-recovery-resume-docker-test.py' \
             2>&1 | tee .evidence/cold-recovery-resume/ubuntu-python368.log
       - name: Unchanged ordinary cold contracts
         run: python3 -B tests/first-upgrade-cold-test.py
-      - name: Preserve evidence, including failure (not production readiness)
+      - name: Independently prove fixture secrets removed, even after Docker failure
+        id: fixture_sanitization
         if: always()
+        run: python3 -B tests/cold-recovery-resume-cleanup.py --sanitize-only
+      - name: Preserve sanitized evidence, including failure (not production readiness)
+        if: always() && steps.fixture_sanitization.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: cold-recovery-resume-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .evidence/cold-recovery-resume/
+          path: |
+            .evidence/cold-recovery-resume/
+            !.evidence/cold-recovery-resume/backend/**/fixture.env
+            !.evidence/cold-recovery-resume/backend/**/compose.json
+            !.evidence/cold-recovery-resume/backend/**/fixture-release-trust.key
           include-hidden-files: true
           if-no-files-found: error
       - name: Remove only own runner image tag

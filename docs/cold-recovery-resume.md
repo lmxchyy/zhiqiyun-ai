@@ -114,8 +114,51 @@ actual Docker ordering/settlement evidence; no broader infrastructure is added.
   ordinary103 descriptors and original deploy/prestage/rollback/control tests
   are unchanged. Existing regression suites must stay green independently.
 
-Remaining P1: exact-head CI and fixed digest availability/certification;
-independent review of actual daemon settlement and guard crash windows;
-full fixed-profile snapshot/start/health timing and integration; fresh current
-hold bindings and later human authorization. Until cleared: **not safe for the
-current hold**, irrespective of a mechanism test PASS.
+### Two bounded evidence additions
+
+- `tests/cold-recovery-resume-request-test.py` forwards each original owned
+  Engine POST once through a test-only Unix HTTP relay. Captured Engine204 before
+  suppressing the downstream response establishes completed-response loss;
+  real CLI timeout/disconnect is not a fabricated exception after another start.
+  In-flight stop uses an actual PID1 TERM marker. Upstream-close start has no
+  phase marker: handler acceptance/pre-lock cancellation remains **unproved**.
+  Independent receipts include full CIDs, image/digest/platform, ownership,
+  restart/state and lifecycle epochs. A genuine signed guard hold retains
+  UNKNOWN/sentinel/spent nonce/lock, even after a factual stopped fence sample.
+  Foreign fixture preimages stay unchanged; no unknown POST is resent.
+- `tests/cold-recovery-resume-backend-test.py` requires actual fixed6ca bytes
+  before provisioning real PG/Rabbit/Redis/MinIO and fixed API/Worker containers.
+  It invokes actual Backend snapshot/certify/verify/healthy, execute and guard;
+  no Backend methods, native transport, PID1/env/mount/runtime observers or
+  outputs are replaced. Completed original migration runner and full exact9
+  enrollment precede the signed fixture hold. Independent pre/post database,
+  container and SQL traces cover drift/recreate refusal, spent replay,
+  controller death, real broker failure and success; per-attempt acknowledged
+  target starts are1/2/2, never ancillary starts or migration/re-enrollment.
+- Internal fixture substitutions are PROJECT, ANCHOR_PATH, COMPOSE, ENV, DIR,
+  WORK, same-digest GHCR REF, fixture historical proof hash OLD_PROOF, and a
+  generated file trust key. ROOT/source identity, APP/DIGEST/IMAGE/OLD_IMAGE,
+  runtime functions and budgets stay actual. Production PROJECT/ANCHOR_PATH
+  defaults remain fixed, with no CLI/environment override. Fixture history is
+  not production historical authority. CI mounts checkout at the identical
+  daemon-visible host path, not a synthetic runtime path bypass.
+- CI runs native unit18, cleanup10, request8, real Backend1 and unchanged owned12
+  inside the existing host900 bound. Actual Backend.certify replaces duplicate
+  rendering-placeholder standalone certification; the unchanged standalone
+  `--certify-fixed` helper remains available. Equivalent full certification
+  evidence is `backend/<owner>/certification.json`; topology/SQL/timing receipts
+  are beside it. Missing bytes fail, not skip/fallback. CI EXIT cleanup uses
+  recorded full IDs/names plus exact owner/project labels only; no down/prune.
+  Empty owned manifests precede private writes. Private-file sanitization runs
+  independently in cleanup finally paths and a separate always-run CI step,
+  even if Docker is unavailable. Artifact upload requires that step to succeed
+  and explicitly excludes fixture env/Compose/trust-key files; an orphan or
+  unproved deletion blocks publication. Cleanup failure remains a failure.
+
+The prior d956 exact-head CI/fixed packaged certification is resolved, not a
+failed PR. These additions require independent review and new exact-head CI.
+Local request evidence cannot close UNKNOWN production Engine applicability,
+and cannot prove the pre-lock request phase. Real fixed Backend runtime/timing
+is CI-needed until its receipts actually pass. Both evidence gates therefore
+remain open; **not safe for the current hold**. Fresh current bindings, a NEW
+candidate and later explicit human approval remain mandatory.

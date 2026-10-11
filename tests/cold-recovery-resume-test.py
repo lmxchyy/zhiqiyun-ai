@@ -146,6 +146,15 @@ class ResumeTests(unittest.TestCase):
             self.execute()
         self.assertEqual(len(self.backend.docker.calls), 2)
 
+    def test_fixture_identity_seams_have_fixed_production_defaults(self):
+        self.assertEqual(r.PROJECT, 'zhiqiyun-ai-prod')
+        self.assertEqual(r.ANCHOR_PATH, os.path.join(r.ROOT, 'ops/cold-recovery-anchor.json'))
+        with mock.patch.object(r, 'PROJECT', 'unique-owned-project'):
+            # Even a genuinely signed foreign-project hold is refused.
+            with self.assertRaises(r.Refused):
+                r.read_stopped_hold(self.directory)
+        self.assertEqual(r.PROJECT, 'zhiqiyun-ai-prod')
+
     def test_hold_states_signatures_and_fixed_identity(self):
         for field, values in {'state': ['ARMED_RECOVERY_REQUIRED', r.STARTING, r.SUCCESS, 'RECOVERY_REQUIRED_UNKNOWN'],
                               'version': [True, 2], 'release_sha': ['c' * 40], 'proof_sha256': ['0' * 64],
