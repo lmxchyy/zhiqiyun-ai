@@ -296,7 +296,8 @@ class RealBackendTests(unittest.TestCase):
         for row in template['quarantine_records']:
             task = row['task_id']
             raw = json.dumps(dict(id=task, userId='fixture-user', type='TEXT_TO_IMAGE', status='PROCESSING', params={}))
-            statements.append("INSERT INTO xz_generation_tasks(id,user_id,type,status,task_status,execution_generation,worker_id,lease_until,last_heartbeat_at,params,raw) VALUES(%s,'fixture-user','TEXT_TO_IMAGE','PROCESSING','RUNNING',%s,'fixture-lease',now()+interval '1 day',now(),'{}',%s);" % (r.transport.parameter(task), r.transport.parameter(row['generation'] or 1), r.transport.parameter(raw)))
+            raw_expression = r.transport.parameter(raw) + '::jsonb'
+            statements.append("INSERT INTO xz_generation_tasks(id,user_id,type,status,task_status,execution_generation,worker_id,lease_until,last_heartbeat_at,params,raw) VALUES(%s,'fixture-user','TEXT_TO_IMAGE','PROCESSING','RUNNING',%s,'fixture-lease',now()+interval '1 day',now(),'{}',%s);" % (r.transport.parameter(task), r.transport.parameter(row['generation'] or 1), raw_expression))
             statements.append("INSERT INTO provider_executions(id,task_id,provider,provider_model,capability,attempt,status,request_fingerprint,task_execution_generation) VALUES(%s,%s,'fixture','fixture','image',1,'prepared',%s,%s);" % (row['execution_id'], r.transport.parameter(task), r.transport.parameter('a' * 64), r.transport.parameter(row['generation'])))
             statements.append('INSERT INTO provider_execution_quarantine(' + ','.join(fields) + ') VALUES(' + ','.join(r.transport.parameter(row[k]) + ('::timestamptz' if k in ('not_before', 'expires_at', 'created_at') else '') for k in fields) + ');')
         for task, state in [('task_000313', 'SUCCEEDED'), ('task_000322', 'CANCELLED')]:
@@ -308,6 +309,19 @@ class RealBackendTests(unittest.TestCase):
                        "INSERT INTO xz_billing_lifecycle_events(id,task_id,user_id,event_type,billing_status,points,idempotency_key) VALUES('fixture-lifecycle',%s,'fixture-user','RESERVE','RESERVED',10,'fixture-lifecycle');" % q,
                        "INSERT INTO xz_billing_events(id,task_id,user_id,point_cost,status) VALUES('fixture-billing',%s,'fixture-user',10,'RESERVED');" % q]
         self.sql('\n'.join(statements))
+        proof = json.loads(self.sql(
+            "SELECT json_build_object('schema_oid', a.atttypid, 'schema_type', a.atttypid::regtype::text, "
+            "'expression_type', pg_typeof(%s)::text, 'expression_value', %s) "
+            "FROM pg_catalog.pg_attribute a WHERE a.attrelid='public.xz_generation_tasks'::regclass "
+            "AND a.attname='raw' AND NOT a.attisdropped;" % (raw_expression, raw_expression)))
+        self.assertEqual(proof['schema_oid'], 3802)
+        self.assertEqual(proof['schema_type'], 'jsonb')
+        self.assertEqual(proof['expression_type'], 'jsonb')
+        self.assertEqual(proof['expression_value'], json.loads(raw))
+        proof['stored_value'] = json.loads(self.sql(
+            "SELECT raw FROM public.xz_generation_tasks WHERE id=%s;" % r.transport.parameter(json.loads(raw)['id'])))
+        self.assertEqual(proof['stored_value'], json.loads(raw))
+        self.write('fixture-raw-type-regression.json', proof)
 
     def bucket(self, secret):
         # Real MinIO bucket provisioning using SigV4, only generated fixture keys.
