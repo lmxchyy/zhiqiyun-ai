@@ -42,6 +42,77 @@ def lifecycle(obj):
                 state={k: obj['State'].get(k) for k in ('Running', 'Status', 'Restarting', 'Paused', 'StartedAt', 'FinishedAt', 'ExitCode')})
 
 
+def field_diff(before, after, path=''):
+    """Exact JSON-pointer differences; list positions and private values retained."""
+    if type(before) is dict and type(after) is dict:
+        rows = []
+        for key in list(before) + [key for key in after if key not in before]:
+            child = path + '/' + key.replace('~', '~0').replace('/', '~1')
+            if key not in before or key not in after:
+                rows.append(dict(path=child, before_present=key in before, after_present=key in after,
+                                 before=before.get(key), after=after.get(key)))
+            else:
+                rows.extend(field_diff(before[key], after[key], child))
+        return rows
+    if type(before) is list and type(after) is list:
+        rows = []
+        for index in range(max(len(before), len(after))):
+            child = path + '/' + str(index)
+            if index >= len(before) or index >= len(after):
+                rows.append(dict(path=child, before_present=index < len(before), after_present=index < len(after),
+                                 before=before[index] if index < len(before) else None,
+                                 after=after[index] if index < len(after) else None))
+            else:
+                rows.extend(field_diff(before[index], after[index], child))
+        return rows
+    return [] if type(before) is type(after) and before == after else [
+        dict(path=path, before_present=True, after_present=True, before=before, after=after)]
+
+
+def public_inputs(value, docker, field=''):
+    """Mask values, not fields; this result is NOT an original hash preimage."""
+    secret_field = any(word in field.upper() for word in ('PASS', 'SECRET', 'TOKEN', 'CREDENTIAL', 'AUTH', 'KEY', 'COOKIE'))
+    if isinstance(value, dict):
+        return {key: public_inputs(item, docker, key) for key, item in value.items()}
+    if isinstance(value, list):
+        return [public_inputs(item, docker, field) for item in value]
+    if isinstance(value, str):
+        if field == 'Env' and '=' in value:
+            name, content = value.split('=', 1)
+            return name + '=' + public_inputs(content, docker, name)
+        return '[redacted]' if secret_field else docker.redact(value)
+    return value
+
+
+def redacted_field_diff(before, after, docker):
+    rows = field_diff(before, after)
+    public_before, public_after = public_inputs(before, docker), public_inputs(after, docker)
+    def at(value, path):
+        for part in path.split('/')[1:] if path else []:
+            part = part.replace('~1', '/').replace('~0', '~')
+            value = value[int(part)] if isinstance(value, list) else value[part]
+        return value
+    return [dict(path=row['path'], before_present=row['before_present'], after_present=row['after_present'],
+                 before=at(public_before, row['path']) if row['before_present'] else None,
+                 after=at(public_after, row['path']) if row['after_present'] else None,
+                 private_values_equal=False) for row in rows]
+
+
+def masked_equality(before, after, docker, path='', field=''):
+    """Public equality receipts computed from actual private values, even unchanged."""
+    if type(before) is dict and type(after) is dict:
+        return [row for key in list(before) + [key for key in after if key not in before]
+                for row in masked_equality(before.get(key), after.get(key), docker,
+                    path + '/' + key.replace('~', '~0').replace('/', '~1'), key)]
+    if type(before) is list and type(after) is list:
+        return [row for index in range(max(len(before), len(after)))
+                for row in masked_equality(before[index] if index < len(before) else None,
+                    after[index] if index < len(after) else None, docker, path + '/' + str(index), field)]
+    if public_inputs(before, docker, field) != before or public_inputs(after, docker, field) != after:
+        return [dict(path=path, private_values_equal=type(before) is type(after) and before == after)]
+    return []
+
+
 class TracedDocker(r.cap.Docker):
     """Only command logging/owned fault injection; never manufactures a result."""
     def __init__(self, trace, owner):
@@ -52,6 +123,23 @@ class TracedDocker(r.cap.Docker):
         self.target_cids = []
         self.rabbit = None
         self.controller_pid = None
+        self.snapshot_capture = None
+        self.rabbit_responses = {}
+        self.diagnostic_errors = []
+    def diagnostic_error(self, stage, error):
+        # Diagnostic failures must never replace an original snapshot/assert error.
+        self.diagnostic_errors.append(dict(stage=stage, error_type=type(error).__name__))
+        try:
+            emit(self.trace, 'snapshot-diagnostic-error', **self.diagnostic_errors[-1])
+        except Exception:
+            print('snapshot-diagnostic-error: ' + stage + ': ' + type(error).__name__, file=sys.stderr)
+    def private_receipt(self, value):
+        path = self.trace.parent / 'rabbitmq-inspect-private.json'
+        fd = os.open(str(path), os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(value, stream, indent=2)
+            stream.write('\n')
     def run(self, args, **kwargs):
         emit(self.trace, 'command', phase=self.phase, argv=[self.redact(str(a)) for a in args],
              stdin_sha256=hashlib.sha256(kwargs['data']).hexdigest() if kwargs.get('data') else None)
@@ -63,6 +151,25 @@ class TracedDocker(r.cap.Docker):
             if (labels.get(LABEL) != self.owner or labels.get('com.docker.compose.project') != 'resume-real-' + self.owner or obj['Image'] != r.IMAGE):
                 raise AssertionError('foreign mutation refused before request')
         result = super().run(args, **kwargs)
+        if self.snapshot_capture and args == ['container', 'inspect', self.rabbit]:
+            try:
+                # run <- Docker.text <- Docker.inspect <- original observe.
+                # Capture only its actual return, never a separately sampled inspect.
+                if sys._getframe(3).f_code is r.observe.__code__:
+                    objects = json.loads(result.stdout.decode('utf-8'))
+                    obj = objects[0] if len(objects) == 1 else {}
+                    labels = obj.get('Config', {}).get('Labels') or {}
+                    if (obj.get('Id') == self.rabbit and labels.get(LABEL) == self.owner and
+                            labels.get('com.docker.compose.project') == 'resume-real-' + self.owner and
+                            labels.get('com.docker.compose.service') == 'rabbitmq'):
+                        policy = {key: obj.get(key) for key in ('Id', 'Image', 'Config', 'HostConfig', 'Mounts', 'Path', 'Args')}
+                        policy['networks'] = sorted(obj.get('NetworkSettings', {}).get('Networks', {}))
+                        self.rabbit_responses.setdefault(self.snapshot_capture, []).append(dict(
+                            stdout=result.stdout.decode('utf-8'), stdout_sha256=hashlib.sha256(result.stdout).hexdigest(),
+                            objects=objects, policy_sha256=r.digest(policy), captured_from='original observe super().run result'))
+                        self.private_receipt(dict(responses=self.rabbit_responses))
+            except Exception as error:
+                self.diagnostic_error('capture-' + self.snapshot_capture, error)
         if self.phase == 'recovery' and args[0] == 'start':
             obj = self.inspect('container', args[-1])
             emit(self.trace, 'original-start-ack', phase=self.phase, cid=obj['Id'], postimage=lifecycle(obj))
@@ -148,7 +255,7 @@ class RealBackendTests(unittest.TestCase):
                 else: self.docker.text([kind, 'rm', identity])
             except Exception:
                 failures.append([kind, identity])
-        for name in ('fixture.env', 'compose.json', 'fixture-release-trust.key'):
+        for name in ('fixture.env', 'compose.json', 'fixture-release-trust.key', 'rabbitmq-inspect-private.json'):
             private = self.path / name
             if private.exists(): private.unlink()
         self.write('cleanup.json', dict(failures=failures, removed=len(self.resources) - len(failures), fixture_secrets_removed=True))
@@ -385,8 +492,51 @@ with urllib.request.urlopen(request,timeout=10) as response: assert response.sta
                                      lifecycle={role: lifecycle(self.docker.inspect('container', cid)) for role, cid in services.items()},
                                      missing_hold='provisioning incomplete' if not hold_path.exists() else None))
 
+    def snapshot_diagnostics(self, initial, post):
+        try:
+            responses = self.docker.rabbit_responses
+            checks = {}
+            for phase, snapshot in (('initial', initial), ('post', post)):
+                captured = responses.get(phase, [])
+                expected = snapshot['containers']['rabbitmq']
+                checks[phase] = dict(capture_count=len(captured), snapshot_policy_sha256=expected['policy_sha256'],
+                    matches_snapshot=len(captured) == 1 and captured[0]['policy_sha256'] == expected['policy_sha256'] and
+                        captured[0]['objects'][0]['Id'] == expected['cid'],
+                    recomputed_policy_sha256=[item['policy_sha256'] for item in captured],
+                    raw_response_sha256=[item['stdout_sha256'] for item in captured])
+            snapshot_diff = field_diff(initial, post)
+            complete = all(check['matches_snapshot'] for check in checks.values())
+            raw_diff = field_diff(responses['initial'][0]['objects'], responses['post'][0]['objects']) if complete else None
+            equality = masked_equality(responses['initial'][0]['objects'], responses['post'][0]['objects'], self.docker) if complete else None
+            private = dict(responses=responses, hash_checks=checks, exact_raw_fielddiff=raw_diff,
+                           exact_snapshot_fielddiff=snapshot_diff)
+            self.docker.private_receipt(private)
+            public_responses = {phase: [dict(objects=public_inputs(item['objects'], self.docker),
+                original_raw_response_sha256=item['stdout_sha256'], original_policy_sha256=item['policy_sha256'])
+                for item in captured] for phase, captured in responses.items()}
+            # Compute exact differences privately, then mask from original field
+            # context. Even changes hidden by redaction retain their exact paths.
+            public_raw_diff = redacted_field_diff(responses['initial'][0]['objects'],
+                responses['post'][0]['objects'], self.docker) if complete else None
+            self.write('snapshot-fielddiff.json', dict(exact_comparison=True,
+                differences=redacted_field_diff(initial, post, self.docker),
+                private_exact_diff_sha256=r.digest(snapshot_diff), private_difference_count=len(snapshot_diff)))
+            self.write('rabbitmq-inspect-redacted.json', dict(not_original_hash_preimage=True,
+                responses=public_responses, hash_checks=checks, diagnostics_complete=complete,
+                differences=public_raw_diff, private_difference_paths=[row['path'] for row in raw_diff] if complete else None,
+                private_exact_diff_sha256=r.digest(raw_diff) if complete else None,
+                masked_field_equality=equality, private_receipt_sha256=r.cold.file_hash(str(self.path / 'rabbitmq-inspect-private.json')),
+                private_mode=oct((self.path / 'rabbitmq-inspect-private.json').stat().st_mode & 0o777),
+                diagnostic_errors=self.docker.diagnostic_errors))
+        except Exception as error:
+            self.docker.diagnostic_error('report', error)
+
     def test_real_backend_full_hold_failures_and_success(self):
-        initial = self.backend.snapshot()
+        self.docker.snapshot_capture = 'initial'
+        try:
+            initial = self.backend.snapshot()
+        finally:
+            self.docker.snapshot_capture = None
         self.assertEqual([row['execution_id'] for row in initial['database']['quarantine_records']], [1, 12, 14, 22, 25, 31, 100, 102, 103])
         self.write('actual-preimage-snapshot.json', initial)
         started = time.monotonic()
@@ -394,7 +544,17 @@ with urllib.request.urlopen(request,timeout=10) as response: assert response.sta
         self.write('certification.json', dict(scope='actual Backend.certify fixed packaged full-history; NOT production authorization',
                                               evidence=evidence, source=initial['source'], image_identity=initial['image_identity'],
                                               policy=initial['policy'], elapsed=time.monotonic() - started))
-        self.assertEqual(self.backend.snapshot(), initial)
+        self.docker.snapshot_capture = 'post'
+        try:
+            post = self.backend.snapshot()
+        finally:
+            self.docker.snapshot_capture = None
+        try:
+            self.write('actual-postimage-snapshot.json', post)
+        except Exception as error:
+            self.docker.diagnostic_error('post-persist', error)
+        self.snapshot_diagnostics(initial, post)
+        self.assertEqual(post, initial)
         hold = r.read_stopped_hold(r.DIR)
         candidate, approval = self.candidate(hold, evidence)
         lock = r.ReleaseLock(r.DIR)

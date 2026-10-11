@@ -87,6 +87,7 @@ jobs:
             !.evidence/cold-recovery-resume/backend/**/fixture.env
             !.evidence/cold-recovery-resume/backend/**/compose.json
             !.evidence/cold-recovery-resume/backend/**/fixture-release-trust.key
+            !**/rabbitmq-inspect-private.json
           include-hidden-files: true
           if-no-files-found: error
       - name: Remove only own runner image tag

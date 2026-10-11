@@ -16,7 +16,7 @@ cap = types.ModuleType('cleanup_capability')
 cap.__file__ = str(path)
 exec(compile(path.read_bytes(), str(path), 'exec'), cap.__dict__)
 OUT = ROOT / '.evidence/cold-recovery-resume'
-PRIVATE = ('fixture.env', 'compose.json', 'fixture-release-trust.key')
+PRIVATE = ('fixture.env', 'compose.json', 'fixture-release-trust.key', 'rabbitmq-inspect-private.json')
 
 
 def remove(docker, kind, identity, label, owner, project):
