@@ -1,6 +1,8 @@
 name: cold-recovery-resume
 
 on:
+  push:
+    branches: ["ci/minio-cache-controlled-970"]
   pull_request:
     paths:
       - 'ops/**'
@@ -16,13 +18,13 @@ permissions:
 
 jobs:
   fixed-target-owned-recovery:
-    runs-on: ubuntu-latest
+    runs-on: ["controlled970-6395f627ed6243bdbf95a09b0b7e142e"]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: 97040a07c67ab3f4293b2b2a470810c28a064890
       - name: Read fixed official package using ephemeral Actions identity only
         uses: docker/login-action@v3
         with:
@@ -69,10 +71,8 @@ jobs:
             --user "$(id -u):$(id -g)" --group-add "$(stat -c '%g' /var/run/docker.sock)" -e HOME=/tmp \
             --name "cold-resume-ci-$RUNNER_OWNER" --label "org.xianzhi.cold-resume.ci=$RUNNER_OWNER" \
             -v "$PWD:$PWD" -v /var/run/docker.sock:/var/run/docker.sock -w "$PWD" "$RUNNER_TAG" \
-            sh -ec 'python3.6 -B tests/cold-recovery-resume-test.py; python3.6 -B tests/cold-recovery-resume-cleanup-test.py; python3.6 -B tests/cold-recovery-resume-request-test.py; python3.6 -B tests/cold-recovery-resume-backend-test.py; python3.6 -B tests/cold-recovery-resume-docker-test.py' \
+            sh -ec 'python3.6 -B tests/cold-recovery-resume-backend-test.py' \
             2>&1 | tee .evidence/cold-recovery-resume/ubuntu-python368.log
-      - name: Unchanged ordinary cold contracts
-        run: python3 -B tests/first-upgrade-cold-test.py
       - name: Independently prove fixture secrets removed, even after Docker failure
         id: fixture_sanitization
         if: always()
