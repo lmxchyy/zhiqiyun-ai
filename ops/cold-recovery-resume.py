@@ -345,6 +345,10 @@ def observe(docker, anchor, running=()):
                 require(type(state.get('ExitCode')) is int and state['ExitCode'] == 0 and state['Status'] == 'exited', 'migration unsuccessful')
             # Network endpoints change on start; bind static networks, not ephemeral IPs.
             policy = {k: obj.get(k) for k in ('Id', 'Image', 'Config', 'HostConfig', 'Mounts', 'Path', 'Args')}
+            # Inspect Mounts is a map-derived inventory, not runtime mount order.
+            # Preserve complete records/duplicates; no other arrays are reordered.
+            if type(policy['Mounts']) is list:
+                policy['Mounts'] = sorted(policy['Mounts'], key=cap.canonical)
             policy['networks'] = sorted(obj.get('NetworkSettings', {}).get('Networks', {}))
             found[service] = {'cid': cid, 'policy_sha256': digest(policy), 'restart_count': obj.get('RestartCount')}
     require(set(found) == set(anchor['services']), 'service coverage changed')
