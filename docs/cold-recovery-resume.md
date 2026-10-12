@@ -24,6 +24,15 @@ queries retain the original scope: exact9 + orphan execution10 + stale tasks
 Actual current data must match them. Original authenticated proof bytes and
 proof nonce are read as **historical identity only**, never renewed authority.
 
+Docker inspect `Mounts` is a map-derived inventory (Moby26.1.4
+`Container.GetMountPoints`), not the runtime mount application order. Its policy
+projection sorts complete records by canonical JSON, retaining every field and
+duplicate. No other arrays are normalized: Env, Entrypoint, Args and HostConfig
+(including Binds/Mounts) remain strictly order-sensitive. All identity, binding,
+restart, network, snapshot/hold, certification and authorization guards remain.
+Read-only production samples reproduced only Mounts-order/hash variation; the
+missing raw pair from the earlier refusal is not retrospectively reconstructed.
+
 ## Entry and later human ceremony (description only)
 
 `ops/cold-recovery-resume.py` has three separate phases with fixed repository

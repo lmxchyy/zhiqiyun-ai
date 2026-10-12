@@ -479,5 +479,112 @@ class MetadataAndFileTests(unittest.TestCase):
                 ast.parse(path.read_text(encoding='utf-8'), feature_version=(3, 6))
 
 
+class MountPolicyTests(unittest.TestCase):
+    """Actual observe producer, no Docker/SQL/probes or reconstructed history."""
+    def setUp(self):
+        self.objects = {}
+        self.anchor = {'services': {}}
+        self.hold = {'release_sha': r.APP, 'proof_sha256': r.OLD_PROOF,
+                     'image_ids': [r.IMAGE], 'project': r.PROJECT}
+        for i, role in enumerate(('xianzhi-ai', 'smartvideo-worker', 'postgres', 'redis',
+                                 'rabbitmq', 'minio', 'disk-monitor', 'postgres-backup', 'migrate')):
+            cid = '{:064x}'.format(i + 1)
+            infra = role in r.cold.INFRASTRUCTURE
+            obj = {'Id': cid, 'Image': r.IMAGE, 'RestartCount': 0,
+                   'Config': {'Image': r.REF, 'Labels': {'com.docker.compose.service': role,
+                              'com.docker.compose.project': r.PROJECT},
+                              'Env': ['K=first', 'K=last'], 'Entrypoint': ['/bin/sh', '-c']},
+                   'HostConfig': {'RestartPolicy': {'Name': 'unless-stopped' if infra else 'no'},
+                                  'Binds': ['one:/one:ro', 'two:/two:rw']},
+                   'Mounts': [{'Type': 'bind', 'Source': 'fixture-one', 'Destination': '/one',
+                               'Driver': '', 'Name': '', 'Mode': 'ro', 'RW': False,
+                               'Propagation': 'rprivate', 'Unknown': {'value': 1}},
+                              {'Type': 'volume', 'Source': 'fixture-two', 'Destination': '/two',
+                               'Driver': 'local', 'Name': 'fixture-volume', 'Mode': 'rw',
+                               'RW': True, 'Propagation': ''}],
+                   'Path': '/bin/sh', 'Args': ['-c', 'fixture-command'],
+                   'NetworkSettings': {'Networks': {'fixture-network': {'IPAddress': 'fixture-ip'}}},
+                   'State': {'Running': infra, 'Paused': False, 'Restarting': False,
+                             'Status': 'running' if infra else 'exited', 'ExitCode': 0,
+                             'Health': {'Status': 'healthy'}, 'StartedAt': 'fixed-epoch'}}
+            self.objects[cid] = obj
+            self.anchor['services'][role] = {'cid': cid, 'image_id': r.IMAGE,
+                                             'image_reference': r.REF, 'started_at': 'fixed-epoch'}
+        self.cid = self.anchor['services']['migrate']['cid']
+        self.obj = self.objects[self.cid]
+
+    def observe(self):
+        calls = []
+        test = self
+        class Docker:
+            def text(self, args):
+                calls.append(('text', args))
+                return '\n'.join(test.objects)
+            def inspect(self, kind, identity):
+                calls.append((kind, identity))
+                return test.objects[identity]
+        with mock.patch.object(r, 'read', return_value=self.hold), \
+                mock.patch.object(r, 'authenticate', side_effect=lambda value: value):
+            result = r.observe(Docker(), self.anchor)
+        self.assertEqual(calls[0], ('text', ['ps', '-aq', '--no-trunc']))
+        self.assertEqual(calls[1:], [('container', cid) for cid in self.objects])
+        return result
+
+    def test_mount_permutations_equal_without_input_mutation(self):
+        import itertools
+        self.obj['Mounts'].append(copy.deepcopy(self.obj['Mounts'][0]))
+        original = copy.deepcopy(self.objects)
+        expected = self.observe()
+        for permutation in itertools.permutations(original[self.cid]['Mounts']):
+            self.obj['Mounts'] = list(copy.deepcopy(permutation))
+            before = copy.deepcopy(self.objects)
+            self.assertEqual(self.observe(), expected)
+            self.assertEqual(self.objects, before)
+
+    def test_every_mount_field_and_duplicate_count_still_bound(self):
+        expected = self.observe()
+        baseline = copy.deepcopy(self.obj['Mounts'])
+        for name in baseline[0]:
+            with self.subTest(field=name):
+                self.obj['Mounts'] = copy.deepcopy(baseline)
+                self.obj['Mounts'][0][name] = {'different': True}
+                self.assertNotEqual(self.observe()['migrate']['policy_sha256'],
+                                    expected['migrate']['policy_sha256'])
+        for mounts in (baseline[:1], baseline + [copy.deepcopy(baseline[0])], None, []):
+            self.obj['Mounts'] = copy.deepcopy(mounts)
+            self.assertNotEqual(self.observe()['migrate']['policy_sha256'],
+                                expected['migrate']['policy_sha256'])
+
+    def test_semantic_arrays_and_configuration_remain_order_sensitive(self):
+        baseline = copy.deepcopy(self.obj)
+        expected = self.observe()['migrate']['policy_sha256']
+        for root, name in (('Config', 'Env'), ('Config', 'Entrypoint'), ('HostConfig', 'Binds')):
+            with self.subTest(field=root + '.' + name):
+                self.objects[self.cid] = copy.deepcopy(baseline)
+                self.objects[self.cid][root][name].reverse()
+                self.assertNotEqual(self.observe()['migrate']['policy_sha256'], expected)
+        for name, value in (('Args', ['fixture-command', '-c']), ('Path', 'changed-path'),
+                            ('Config', dict(baseline['Config'], Image='changed-image-reference')),
+                            ('HostConfig', dict(baseline['HostConfig'], NetworkMode='changed-network')),
+                            ('NetworkSettings', {'Networks': {'another-network': {}}})):
+            with self.subTest(field=name):
+                self.objects[self.cid] = copy.deepcopy(baseline)
+                self.objects[self.cid][name] = value
+                if name == 'Config':
+                    with self.assertRaises(r.Refused): self.observe()
+                else:
+                    self.assertNotEqual(self.observe()['migrate']['policy_sha256'], expected)
+
+    def test_identity_and_restart_guards_not_weakened(self):
+        baseline = copy.deepcopy(self.obj)
+        for field, value in (('Id', 'changed-cid'), ('Image', 'changed-image')):
+            self.objects[self.cid] = copy.deepcopy(baseline)
+            self.objects[self.cid][field] = value
+            with self.assertRaises(r.Refused): self.observe()
+        self.objects[self.cid] = copy.deepcopy(baseline)
+        self.objects[self.cid]['HostConfig']['RestartPolicy']['Name'] = 'always'
+        with self.assertRaises(r.Refused): self.observe()
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
