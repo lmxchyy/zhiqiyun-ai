@@ -55,6 +55,23 @@ beyond candidate validity. Checks occur after long observations, after sentinel
 fsync and before each start and commit. Expiry fails; there is no TTL extension.
 Full-path timing on the fixed production-like configuration is still unmeasured.
 
+Prepare failures additionally emit `COLD_RECOVERY_PREPARE_DIAGNOSTIC` JSON and
+best-effort save a separate exclusive, no-symlink 0600
+`.prestage/prepare-diagnostic-<uuid>.json` (no path overrides). Metadata contains
+only a fixed stage, trusted repository caller/function/line check, static reason
+code, allowlisted exception types/chain locations and boolean/count comparisons
+of already-returned snapshots. No messages, exception arguments, configuration,
+raw snapshots or business rows are saved. `POST_SNAPSHOT_MISMATCH` and
+`STOPPED_HOLD_MISMATCH` remain distinct without reading the hold on unequal
+snapshots. Generic refusal/exit1, lock cleanup, strict guards, native calls,
+candidate/signature/phrase and approve/execute authority remain unchanged;
+observer failure cannot alter the result. Fatal host loss may emit no diagnostic.
+The independent `prepare-diagnostic-unit` CI job runs focused stdlib diagnostics,
+existing unit18 and ordinary cold contracts without Docker/DB; it does not replace
+or relabel the existing fixed-target job or its known failures. After independent
+review/CI, only the parent's separately authorized final single native prepare
+may produce a fresh candidate/phrase or specific refusal metadata, then STOP.
+
 ## Durable outcomes and guard
 
 The hold directory always remains and continues blocking ordinary

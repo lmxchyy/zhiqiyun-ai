@@ -60,6 +60,36 @@ cap = cold.capability
 transport = load('resume_transport', 'quarantine-psql-transport.py')
 runtime = load('resume_runtime', 'verify-release-runtime.py')
 Refused = cap.Refused
+prepare_diagnostics = load('resume_prepare_diagnostics', 'cold-recovery-prepare-diagnostics.py')
+_prepare_diagnostic = None
+_prepare_active = False
+
+
+def prepare_observe(stage, **values):
+    if _prepare_diagnostic is not None:
+        try:
+            _prepare_diagnostic.observe(stage, **values)
+        except BaseException:
+            pass
+
+
+def prepare_snapshot_equal(post, initial):
+    prepare_observe('snapshot_equality', post_snapshot_returned=True)
+    equal = post == initial  # Original strict comparison; no normalization.
+    prepare_observe('snapshot_equality', snapshot_equal=equal)
+    if _prepare_diagnostic is not None:
+        try:
+            _prepare_diagnostic.snapshots(initial, post)
+        except BaseException:
+            pass
+    if equal:
+        prepare_observe('hold_equality')
+    return equal
+
+
+def prepare_hold_equal(equal):
+    prepare_observe('hold_equality', hold_equal=equal)
+    return equal
 
 
 def require(condition, reason):
@@ -342,9 +372,12 @@ class Backend:
                 'model_sha256': digest(model), 'policy': policy, 'image_identity': identity}
 
     def certify(self, snapshot):
+        prepare_observe('attest')
         evidence = cap.attest(REF, APP, snapshot['policy'], synthetic=False,
                               evidence_directory=os.path.join(ROOT, '.evidence/cold-recovery-resume'), include_history=True)
+        prepare_observe('capability_verify', attest_returned=True)
         self.verify(evidence, snapshot)
+        prepare_observe('capability_verify', verify_returned=True)
         return evidence
 
     def verify(self, evidence, snapshot):
@@ -634,11 +667,24 @@ def execute(candidate, approval, backend, lock, directory=DIR, supervisor_factor
 
 
 def main():
+    global _prepare_diagnostic, _prepare_active
+    _prepare_diagnostic = None
+    _prepare_active = False
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('prepare', 'approve', 'execute'))
     parser.add_argument('--operator')
     parser.add_argument('--confirmation')
     args = parser.parse_args()
+    if args.action == 'prepare':
+        _prepare_active = True
+        try:
+            sources = [(globals(), __file__, 'ops/cold-recovery-resume.py')]
+            sources += [(module.__dict__, module.__file__, 'ops/' + os.path.basename(module.__file__))
+                        for module in (cold, cap, transport, runtime)]
+            _prepare_diagnostic = prepare_diagnostics.Diagnostic(ROOT, sources, Refused,
+                                                               transport.TransportError, runtime.GateError)
+        except BaseException:
+            pass
     require(sys.platform == 'linux' and os.geteuid() == 0, 'root-owned native Linux entry required')
     os.chdir(ROOT)
     # Trust root remains existing release-trust key; no secret env/test override.
@@ -650,8 +696,11 @@ def main():
             os.environ.pop(name)
     for path in (ROOT, DIR, WORK, os.path.join(WORK, 'state.json'), COMPOSE, ENV, PROOF_PATH):
         protected_path(path)
+    prepare_observe('source_identity')
     source = source_identity()
+    prepare_observe('initial_hold')
     hold = read_stopped_hold()
+    prepare_observe('historical_binding')
     historical = authenticate(read(PROOF_PATH))  # historical identity ONLY, no TTL authority
     require(cold.file_hash(PROOF_PATH) == OLD_PROOF and historical.get('git_sha') == APP and
             historical.get('image_reference') == REF and historical.get('proof_nonce') == hold['proof_nonce'] and
@@ -659,20 +708,29 @@ def main():
             historical.get('cold_recovery_policy', {}).get('project') == hold['project'] and
             historical.get('compose_hash') == cold.file_hash(COMPOSE) and
             historical.get('env_hash') == cold.file_hash(ENV), 'historical signed identity/config mismatch')
+    prepare_observe('lock_acquire')
     lock = ReleaseLock()
     try:
         if args.action == 'prepare':
             require(not args.operator and not args.confirmation, 'prepare cannot approve')
+            prepare_observe('initial_snapshot')
             backend = Backend()
             snapshot = backend.snapshot()
+            prepare_observe('attest', initial_snapshot_returned=True)
             evidence = backend.certify(snapshot)
-            require(backend.snapshot() == snapshot and read_stopped_hold() == hold, 'post-certification drift')
+            prepare_observe('post_snapshot')
+            require(prepare_snapshot_equal(backend.snapshot(), snapshot) and
+                    prepare_hold_equal(read_stopped_hold() == hold), 'post-certification drift')
+            prepare_observe('candidate_signing')
             now = int(time.time())
             candidate = {'version': 1, 'purpose': DOMAIN + '-proof', 'nonce': uuid.uuid4().hex,
                          'not_before': now, 'expires_at': now + 900, 'hold_sha256': digest(hold),
                          'snapshot': snapshot, 'runtime_capability': evidence,
                          'operations': ['start-existing-api', 'start-existing-worker']}
-            cold.atomic_json(CANDIDATE, cold.signed(candidate))
+            signed = cold.signed(candidate)
+            prepare_observe('candidate_publication')
+            cold.atomic_json(CANDIDATE, signed)
+            prepare_observe('candidate_phrase')
             print(phrase(candidate))
         else:
             protected_path(CANDIDATE)
@@ -688,14 +746,28 @@ def main():
                 execute(candidate, read(APPROVAL), Backend(), lock)
                 print(SUCCESS + '; ordinary releases remain blocked')
     finally:
+        prepare_observe('lock_release')
         if os.path.exists(lock.path):
             lock.release()
+        prepare_observe('lock_released')
+
+
+def entry():
+    try:
+        main()
+    except BaseException as error:
+        # Never print Docker/config/database exceptions or secret values.
+        sys.stderr.write('COLD_RECOVERY_RESUME_REFUSED: hold retained; review authenticated state and lock\n')
+        if _prepare_active:
+            try:
+                if _prepare_diagnostic is not None:
+                    _prepare_diagnostic.emit(error, sys.stderr)
+                else:
+                    sys.stderr.write('COLD_RECOVERY_PREPARE_DIAGNOSTIC: {"reason_code":"UNKNOWN","check_name":"UNKNOWN","stage":"diagnostic_unavailable","error_type":"UNKNOWN"}\n')
+            except BaseException:
+                pass
+        sys.exit(1)
 
 
 if __name__ == '__main__':
-    try:
-        main()
-    except BaseException:
-        # Never print Docker/config/database exceptions or secret values.
-        sys.stderr.write('COLD_RECOVERY_RESUME_REFUSED: hold retained; review authenticated state and lock\n')
-        sys.exit(1)
+    entry()
