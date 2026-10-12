@@ -188,3 +188,37 @@ and cannot prove the pre-lock request phase. Real fixed Backend runtime/timing
 is CI-needed until its receipts actually pass. Both evidence gates therefore
 remain open; **not safe for the current hold**. Fresh current bindings, a NEW
 candidate and later explicit human approval remain mandatory.
+
+### Post-start first-failure diagnostic (observer only)
+
+After the two existing target starts, failed health/readiness, process/policy,
+protected-snapshot, window/lock or terminal-commit checks emit
+`COLD_RECOVERY_POST_START_DIAGNOSTIC` with `reason_code`, `check_name`, `stage`,
+`expected`, bounded `actual` summaries and trusted source/function/line.
+The parent retains the exception reference and bounded scalar state before
+cleanup can replace it; the guard likewise captures a terminal-commit failure
+in memory before fencing. No diagnostic I/O, source reads, threads or waits
+occur on that pre-cleanup path. After native cleanup, a daemon observer gets at
+most50ms post-cleanup grace (no retry) to report; stalled source/filesystem/output
+work cannot obstruct fencing or keep the guard alive at exit. One exclusive
+private `.prestage/post-start-diagnostic-<id>.json` shared across the fork retains
+the first record. Parent commit ACK errors are not emitted as the guard's unique
+failure, even if its diagnostic is unavailable. This file grants no recovery
+authority. It is mode0600, no-symlink/exclusive, best effort; persistence/output
+failure does not alter refusal, cleanup, acceptance deadlines or generic entry
+error. Stalled I/O, SIGKILL/host loss or exit can leave no complete diagnostic;
+report UNKNOWN rather than inventing a first check.
+
+No exception text/arguments, environment values, secrets, database business
+records, arbitrary locals dictionaries or paths are emitted. Static guard labels
+come from trusted source, not exception messages. Copied runtime modules require
+matching trusted code objects. Only allowlisted role/running/health/readiness
+scalar enums and equality/count summaries of already-returned snapshots may be
+reported; unknown values stay unknown. No extra Docker/SQL/backend/probe or image
+hash RUN is made for logging. All original checks, snapshot strictness, ordering,
+call counts, budgets, schemas, single-use and fence behavior remain intact.
+Tests are in the already-CI-wired diagnostics suite; fixtures are not production
+certification. This addition cannot retrospectively recover a dead process's
+missing failure trace and cannot make an expired/spent or old-controller-bound
+candidate executable. New source-bound authority is still required for a later
+production recovery; no new candidate or production START is implied by Review.

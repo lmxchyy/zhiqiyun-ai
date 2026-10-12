@@ -63,6 +63,46 @@ Refused = cap.Refused
 prepare_diagnostics = load('resume_prepare_diagnostics', 'cold-recovery-prepare-diagnostics.py')
 _prepare_diagnostic = None
 _prepare_active = False
+_post_start_diagnostic = None
+
+
+def post_start_stage(stage):
+    try:
+        if _post_start_diagnostic is not None:
+            _post_start_diagnostic.stage_at(stage)
+    except BaseException:
+        pass
+
+
+def post_start_failure(error, guard=False):
+    try:
+        if _post_start_diagnostic is not None and _post_start_diagnostic.stage in (
+                'post_start_ack', 'post_start_health', 'post_start_verify',
+                'post_start_snapshot', 'post_start_window_lock', 'post_start_commit'):
+            # A parent commit ACK is not the guard's actual failing check.
+            if guard or _post_start_diagnostic.stage != 'post_start_commit':
+                _post_start_diagnostic.capture_first(error)
+    except BaseException:
+        pass
+
+
+def post_start_emit_after_cleanup():
+    try:
+        if _post_start_diagnostic is not None:
+            _post_start_diagnostic.emit_after_cleanup(sys.stderr)
+    except BaseException:
+        pass
+
+
+def post_start_snapshot_equal(post, initial):
+    equal = post == initial  # Same original strict comparison; no normalization.
+    try:
+        if _post_start_diagnostic is not None:
+            _post_start_diagnostic.snapshots(initial, post)
+            _post_start_diagnostic.summaries['snapshot_equal'] = equal
+    except BaseException:
+        pass
+    return equal
 
 
 def prepare_observe(stage, **values):
@@ -543,11 +583,14 @@ class AttemptSupervisor:
                         uncertain = True
                         raise
                     started += 1
+                    if started == len(cids):
+                        post_start_stage('post_start_ack')
                     hold = check_attempt()
                     hold.pop('recovery_indeterminate_operation', None)
                     cold.write_hold(directory, hold)
                     os.write(response, b'O')
                 elif message == b'C':
+                    post_start_stage('post_start_commit')
                     # Single writer for terminal success AND failure: the parent
                     # cannot race this guard's deadline/EOF fence with a write.
                     require(authority is not None and started == len(cids), 'commit authority missing')
@@ -578,8 +621,8 @@ class AttemptSupervisor:
                     return 0
                 else:
                     break
-        except Exception:
-            pass
+        except Exception as error:
+            post_start_failure(error, guard=True)  # Memory only, never I/O before fence.
         try:
             # A lost owner or substituted authenticated attempt is NOT authority
             # to mutate its hold, containers or lock, even in failure cleanup.
@@ -595,6 +638,7 @@ class AttemptSupervisor:
                 lock.release()
         except Exception:
             lock.retained = True
+        post_start_emit_after_cleanup()
         return 1
 
     def command(self, message):
@@ -619,6 +663,7 @@ class AttemptSupervisor:
 
 
 def execute(candidate, approval, backend, lock, directory=DIR, supervisor_factory=AttemptSupervisor):
+    global _post_start_diagnostic
     hold = read_stopped_hold(directory)
     authority = {'hold': json.loads(cap.canonical(hold)), 'candidate': candidate, 'approval': approval}
     human = validate_approval(approval, candidate, hold, source_identity())
@@ -635,6 +680,16 @@ def execute(candidate, approval, backend, lock, directory=DIR, supervisor_factor
     hold.update(state=STARTING, recovery_attempt={'nonce': candidate['nonce'], 'approval_sha256': digest(approval),
                 'candidate_sha256': digest(candidate), 'operator': human['operator'], 'owner': lock.owner})
     cold.write_hold(directory, hold)
+    _post_start_diagnostic = None
+    try:
+        modules = (cold, cap, transport, runtime)
+        sources = [(globals(), __file__, 'ops/cold-recovery-resume.py')]
+        sources += [(module.__dict__, module.__file__, 'ops/' + os.path.basename(module.__file__)) for module in modules]
+        _post_start_diagnostic = prepare_diagnostics.PostStartDiagnostic(ROOT, sources, Refused,
+                                                                       transport.TransportError, runtime.GateError)
+        _post_start_diagnostic.directory = directory
+    except BaseException:
+        pass
     supervisor = None
     success = False
     try:
@@ -649,25 +704,38 @@ def execute(candidate, approval, backend, lock, directory=DIR, supervisor_factor
             check_window(human)
             check_window(candidate)
             supervisor.command(b'S')
-        backend.healthy(candidate['runtime_capability'])
-        check_window(human)
-        check_window(candidate)
-        backend.verify(candidate['runtime_capability'], candidate['snapshot'])
-        require(backend.snapshot(ROLES) == candidate['snapshot'], 'post-start protected drift')
-        check_window(human)
-        check_window(candidate)
-        lock.check()
-        # Guard alone commits durable terminal state, serialized with its fence.
-        supervisor.close(success=True)
-        success = True
+        try:
+            post_start_stage('post_start_health')
+            backend.healthy(candidate['runtime_capability'])
+            post_start_stage('post_start_window_lock')
+            check_window(human)
+            check_window(candidate)
+            post_start_stage('post_start_verify')
+            backend.verify(candidate['runtime_capability'], candidate['snapshot'])
+            post_start_stage('post_start_snapshot')
+            require(post_start_snapshot_equal(backend.snapshot(ROLES), candidate['snapshot']), 'post-start protected drift')
+            post_start_stage('post_start_window_lock')
+            check_window(human)
+            check_window(candidate)
+            lock.check()
+            # Guard alone commits durable terminal state, serialized with its fence.
+            post_start_stage('post_start_commit')
+            supervisor.close(success=True)
+            success = True
+        except BaseException as error:
+            post_start_failure(error)  # Capture before cleanup can replace the exception.
+            raise
     finally:
-        if not success:
-            if supervisor is not None:
-                supervisor.close()
-            else:
-                lock.retained = True
-                check_owned_attempt(directory, lock, candidate['nonce'], cids, authority)
-                cold.fence(directory, 'recovery-supervisor-arm', 'supervisor-unavailable', backend.docker)
+        try:
+            if not success:
+                if supervisor is not None:
+                    supervisor.close()
+                else:
+                    lock.retained = True
+                    check_owned_attempt(directory, lock, candidate['nonce'], cids, authority)
+                    cold.fence(directory, 'recovery-supervisor-arm', 'supervisor-unavailable', backend.docker)
+        finally:
+            post_start_emit_after_cleanup()
 
 
 def main():

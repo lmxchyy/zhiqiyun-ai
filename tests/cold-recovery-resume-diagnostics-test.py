@@ -10,6 +10,8 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
+import threading
+import time
 import types
 import unittest
 from unittest import mock
@@ -584,6 +586,283 @@ class MountPolicyTests(unittest.TestCase):
         self.objects[self.cid] = copy.deepcopy(baseline)
         self.objects[self.cid]['HostConfig']['RestartPolicy']['Name'] = 'always'
         with self.assertRaises(r.Refused): self.observe()
+
+
+def post_diagnostic():
+    modules = (r, r.cap, r.cold, r.transport, r.runtime)
+    sources = [(m.__dict__, m.__file__, 'ops/' + os.path.basename(m.__file__)) for m in modules]
+    return d.PostStartDiagnostic(str(ROOT), sources, r.Refused, r.transport.TransportError, r.runtime.GateError)
+
+
+class PostStartDiagnosticsTests(unittest.TestCase):
+    def runtime_failure(self, ready=None, worker_health='starting'):
+        calls = []
+        def execute(args):
+            calls.append(args)
+            if args[-1] == r.runtime.FLAGS:
+                return json.dumps(dict(GENERATION_FAIR_SCHEDULER_ENABLED='true', ASYNC_MESSAGING_ENABLED='true', secret=CANARY))
+            if args[-1].endswith('/metrics'):
+                return '\n'.join(name + ' 1' for name in ('generation_scheduler_db_scrape_success', 'generation_scheduler_errors_total', 'generation_scheduler_dispatched_total', 'generation_scheduler_recovered_total'))
+            if args[-1].endswith('/ready'):
+                return json.dumps(ready or dict(ready='true', asyncMessaging='READY', secret=CANARY))
+            if args[-3:-1] == ['ps', '-q']:
+                return 'worker-cid' if args[-1] == 'smartvideo-worker' else 'api-cid'
+            if '{{.State.Running}}' in args:
+                return 'true'
+            if '{{.State.Health.Status}}' in args:
+                return worker_health if args[-1] == 'worker-cid' else 'healthy'
+            raise AssertionError('unexpected observer call')
+        try:
+            r.runtime.verify('post', 'compose', 'env', execute=execute, pause=lambda _: None)
+        except r.runtime.GateError as error:
+            return error, calls
+        raise AssertionError('fixture did not refuse')
+
+    def test_actual_worker_starting_check_has_expected_actual_and_source(self):
+        error, calls = self.runtime_failure()
+        diag = post_diagnostic(); diag.stage_at('post_start_health')
+        data = diag.details(error)
+        self.assertEqual(data['reason_code'], 'POST_START_RUNTIME_HEALTH_FAILED')
+        self.assertEqual(data['source_file'], 'ops/verify-release-runtime.py')
+        self.assertEqual(data['function'], 'verify')
+        self.assertEqual(data['expected']['healthy'], 'healthy')
+        self.assertEqual(data['actual']['healthy'], 'starting')
+        self.assertEqual(data['actual']['service'], 'smartvideo-worker')
+        self.assertEqual(len(calls), 10)
+        self.assertNotIn(CANARY, json.dumps(data))
+
+    def test_actual_ready_failure_only_emits_bounded_returned_enums(self):
+        error, calls = self.runtime_failure(dict(ready='false', asyncMessaging='DEGRADED', password=CANARY))
+        diag = post_diagnostic(); diag.stage_at('post_start_health'); data = diag.details(error)
+        self.assertEqual(data['reason_code'], 'POST_START_READY_FAILED')
+        self.assertEqual(data['expected']['asyncMessaging'], 'READY')
+        self.assertEqual(data['actual']['asyncMessaging'], 'DEGRADED')
+        self.assertEqual(len(calls), 4)
+        self.assertNotIn(CANARY, json.dumps(data))
+
+    def test_official_dynamic_runtime_namespace_matches_code_not_fake_filename(self):
+        module = types.ModuleType('runtime_health'); module.__file__ = r.runtime.__file__
+        exec(compile(Path(module.__file__).read_bytes(), module.__file__, 'exec'), module.__dict__)
+        try:
+            module.verify_quarantine_barrier_read_only('compose', 'env', execute=lambda _: '0')
+        except BaseException as error:
+            data = post_diagnostic().details(error)
+        self.assertEqual(data['source_file'], 'ops/verify-release-runtime.py')
+        self.assertEqual(data['guard_label'], 'quarantine barrier relation or immutable trigger unhealthy or absent')
+        fake = {}; exec(compile('def fake():\n raise ValueError("' + CANARY + '")\n', r.runtime.__file__, 'exec'), fake)
+        try:
+            fake['fake']()
+        except BaseException as error:
+            data = post_diagnostic().details(error)
+        self.assertEqual(data['check_name'], 'UNKNOWN')
+        self.assertNotIn(CANARY, json.dumps(data))
+
+    def test_hostile_error_and_summary_values_never_escape(self):
+        diag = post_diagnostic(); diag.stage_at(CANARY)
+        try:
+            raise NoString(CANARY)
+        except BaseException as error:
+            data = diag.details(error)
+        self.assertNotIn(CANARY, json.dumps(data))
+        error, _ = self.runtime_failure(dict(ready=CANARY, asyncMessaging=CANARY, env=CANARY))
+        data = diag.details(error)
+        self.assertNotIn(CANARY, json.dumps(data))
+        self.assertEqual(data['actual']['ready'], 'UNRECOGNIZED')
+        self.assertEqual(data['actual']['asyncMessaging'], 'UNRECOGNIZED')
+
+    def test_first_exclusive_private_record_survives_other_process_copy_and_io_fail(self):
+        error, _ = self.runtime_failure()
+        with tempfile.TemporaryDirectory() as directory:
+            child = post_diagnostic(); child.directory = directory; child.stage_at('post_start_commit')
+            parent = post_diagnostic(); parent.directory = directory; parent.filename = child.filename; parent.stage_at('post_start_health')
+            output = io.StringIO()
+            # Protected ancestor metadata mocked only for owned unit tempdir; actual O_EXCL/mode/fsync are real.
+            with mock.patch.object(d.os, 'lstat', return_value=types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o700)), mock.patch.object(d.os, 'O_NOFOLLOW', getattr(d.os, 'O_NOFOLLOW', 0), create=True):
+                if hasattr(os, 'fork'):
+                    pid = os.fork()
+                    if pid == 0:
+                        try:
+                            child.emit_first(error, io.StringIO())
+                        finally:
+                            os._exit(0)
+                    _, status = os.waitpid(pid, 0)
+                    self.assertEqual(status, 0)
+                    # Child stderr is separate in this fixture; the saved first record is shared.
+                    output.write('COLD_RECOVERY_POST_START_DIAGNOSTIC: child\n')
+                else:
+                    child.emit_first(error, output)
+                saved = (Path(directory) / child.filename).read_bytes()
+                parent.emit_first(NoString(CANARY), output)
+            self.assertEqual((Path(directory) / child.filename).read_bytes(), saved)
+            self.assertEqual(output.getvalue().count('COLD_RECOVERY_POST_START_DIAGNOSTIC: '), 1)
+            if os.name != 'nt': self.assertEqual((Path(directory) / child.filename).stat().st_mode & 0o777, 0o600)
+            failing = post_diagnostic(); failing.stage_at('post_start_health'); output = io.StringIO()
+            with mock.patch.object(failing, 'persist', side_effect=PermissionError(CANARY)):
+                failing.emit_first(error, output)
+            self.assertIn('POST_START_RUNTIME_HEALTH_FAILED', output.getvalue())
+            self.assertNotIn(CANARY, output.getvalue())
+
+    def test_path_guards_are_private_no_symlink_no_new_authority(self):
+        diag = post_diagnostic()
+        for uid, mode in ((1, stat.S_IFDIR | 0o700), (0, stat.S_IFLNK | 0o700), (0, stat.S_IFDIR | 0o777)):
+            with mock.patch.object(d.os, 'lstat', return_value=types.SimpleNamespace(st_uid=uid, st_mode=mode)):
+                with self.assertRaises(PermissionError): diag.persist('{}')
+        self.assertTrue(diag.filename.startswith('post-start-diagnostic-'))
+
+    def execute_case(self):
+        path = ROOT / 'tests/cold-recovery-resume-test.py'
+        module = types.ModuleType('existing_execute_fixture'); module.__file__ = str(path)
+        exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+        case = module.ResumeTests(); case.setUp(); self.addCleanup(case.doCleanups)
+        return module, case
+
+    def test_actual_execute_preserves_first_health_error_before_cleanup_mask(self):
+        module, case = self.execute_case(); error, _ = self.runtime_failure(); records = []; done = threading.Event()
+        def save(text):
+            records.append(text); done.set()
+        with mock.patch.object(case.backend, 'healthy', side_effect=error), mock.patch.object(module.r.prepare_diagnostics.PostStartDiagnostic, 'persist', side_effect=save), mock.patch.object(module.r.sys, 'stderr', io.StringIO()):
+            with self.assertRaises(module.r.Refused): case.execute()
+            self.assertTrue(done.wait(5))  # Fixture wait only, not native cleanup.
+        self.assertEqual(len(records), 1)
+        data = json.loads(records[0])
+        self.assertEqual(data['stage'], 'post_start_health')
+        self.assertEqual(data['reason_code'], 'POST_START_RUNTIME_HEALTH_FAILED')
+        self.assertEqual(len(case.backend.docker.calls), 2)
+        self.assertEqual(case.backend.samples, 3)
+        self.assertEqual(module.r.cold.read_hold(case.directory)['state'], module.r.STOPPED)
+        self.assertNotIn(CANARY, records[0])
+
+    def test_post_snapshot_summary_keeps_original_strict_equality_and_call_count(self):
+        module, case = self.execute_case(); case.backend.drift_at = 4; records = []; done = threading.Event()
+        def save(text):
+            records.append(text); done.set()
+        with mock.patch.object(module.r.prepare_diagnostics.PostStartDiagnostic, 'persist', side_effect=save), mock.patch.object(module.r.sys, 'stderr', io.StringIO()):
+            with self.assertRaises(module.r.Refused): case.execute()
+            self.assertTrue(done.wait(5))
+        data = json.loads(records[0]); self.assertEqual(data['reason_code'], 'POST_START_PROTECTED_SNAPSHOT_MISMATCH')
+        self.assertFalse(data['actual']['snapshot_equal'])
+        self.assertEqual(case.backend.samples, 4)
+        self.assertEqual(len(case.backend.docker.calls), 2)
+
+    def test_success_and_diagnostic_failure_do_not_change_existing_calls(self):
+        module, case = self.execute_case()
+        with mock.patch.object(module.r.prepare_diagnostics.PostStartDiagnostic, 'persist', side_effect=AssertionError('should not write')):
+            case.execute()
+        self.assertEqual(case.backend.samples, 4)
+        self.assertEqual(len(case.backend.docker.calls), 2)
+        self.assertEqual(module.r.cold.read_hold(case.directory)['state'], module.r.SUCCESS)
+
+    def watch_failure(self, output, persist, blocked=False):
+        diag = post_diagnostic(); events = []; entered = threading.Event(); complete = threading.Event()
+        def save(text):
+            self.assertEqual(events, ['fence', 'release'])
+            entered.set()
+            persist(text)
+            complete.set()
+
+        lock = types.SimpleNamespace(owner='owner', retained=False, release=lambda: events.append('release'))
+        hold = {'state': r.STARTING, 'errors': []}
+        authority = {'candidate': {'runtime_capability': {}, 'snapshot': {'policy': {}}}, 'approval': {}, 'hold': {}}
+        docker = types.SimpleNamespace(text=lambda *args, **kwargs: 'started')
+        with ExitStack() as stack:
+            for target, name, value in ((r, '_post_start_diagnostic', diag), (r.sys, 'stderr', output)):
+                stack.enter_context(mock.patch.object(target, name, value))
+            stack.enter_context(mock.patch.object(diag, 'persist', side_effect=save))
+            stack.enter_context(mock.patch.object(r, 'check_owned_attempt', return_value=hold))
+            stack.enter_context(mock.patch.object(r.cold, 'read_hold', return_value=hold))
+            stack.enter_context(mock.patch.object(r.cold, 'write_hold'))
+            stack.enter_context(mock.patch.object(r.cold, 'fence', side_effect=lambda *a, **k: events.append('fence')))
+            stack.enter_context(mock.patch.object(r, 'validate_approval', return_value={}))
+            stack.enter_context(mock.patch.object(r, 'source_identity', return_value={}))
+            stack.enter_context(mock.patch.object(r, 'authenticate', return_value={}))
+            stack.enter_context(mock.patch.object(r, 'check_window'))
+            stack.enter_context(mock.patch.object(r.cap, 'verify', return_value=r.IMAGE))
+            stack.enter_context(mock.patch.object(r.cap, 'verify_history', return_value=False))
+            stack.enter_context(mock.patch.object(r.signal, 'signal'))
+            stack.enter_context(mock.patch.object(r.select, 'select', return_value=([10], [], [])))
+            stack.enter_context(mock.patch.object(r.os, 'read', side_effect=[b'S', b'S', b'C']))
+            stack.enter_context(mock.patch.object(r.os, 'write'))
+            start = time.monotonic()
+            self.assertEqual(r.AttemptSupervisor.watch('unused', lock, docker, 'nonce', ['one', 'two'], 10, 11, 300, authority), 1)
+            self.assertLess(time.monotonic() - start, 2)
+            self.assertTrue(entered.wait(5))  # Unit fixture only; keep patches until observer starts.
+            if not blocked:
+                self.assertTrue(complete.wait(5))
+        self.assertEqual(events, ['fence', 'release'])
+        return diag
+
+    def test_real_watch_commit_failure_captures_before_but_emits_after_fence(self):
+        output = io.StringIO(); records = []
+        diag = self.watch_failure(output, records.append)
+        self.assertEqual(len(records), 1)
+        data = json.loads(output.getvalue().split(': ', 1)[1])
+        self.assertEqual(data['stage'], 'post_start_commit')
+        self.assertEqual(data['guard_label'], 'commit capability unavailable')
+        self.assertEqual(data['function'], 'watch')
+        self.assertIsNotNone(diag.captured)
+        # Parent ACK cannot be mislabeled as the unique guard failure, even if
+        # guard output was dropped/stalled and its exclusive file is missing.
+        parent = post_diagnostic(); parent.stage_at('post_start_commit')
+        with mock.patch.object(r, '_post_start_diagnostic', parent):
+            r.post_start_failure(NoString(CANARY))
+        self.assertIsNone(parent.captured)
+
+    def test_stalled_persistence_cannot_delay_watch_fence_or_return(self):
+        entered = threading.Event(); release = threading.Event(); done = threading.Event()
+        def stalled(_):
+            entered.set()
+            release.wait()
+            done.set()
+        try:
+            diag = self.watch_failure(io.StringIO(), stalled, blocked=True)
+            self.assertTrue(entered.wait(1))
+            self.assertFalse(done.is_set())
+            self.assertTrue(diag.dispatched)
+        finally:
+            release.set()
+            self.assertTrue(done.wait(2))
+
+    def test_undrained_pipe_output_cannot_delay_watch_fence_or_return(self):
+        entered = threading.Event(); release = threading.Event(); done = threading.Event()
+        read_fd, write_fd = os.pipe()
+        # Large fixture-only write fills a real pipe on Linux/Windows. Production
+        # sends only the bounded diagnostic; a previously full pipe behaves the same.
+        class PipeOutput:
+            def write(self, text):
+                entered.set()
+                try:
+                    remaining = 1024 * 1024
+                    while remaining:
+                        remaining -= os.write(write_fd, b'x' * remaining)
+                except OSError:
+                    pass
+                finally:
+                    done.set()
+            def flush(self): pass
+        try:
+            self.watch_failure(PipeOutput(), lambda _: None)
+            self.assertTrue(entered.wait(1))
+            self.assertFalse(done.is_set())
+        finally:
+            os.close(read_fd)  # Release only this fixture's blocked writer.
+            self.assertTrue(done.wait(2))
+            os.close(write_fd)
+
+    def test_capture_first_does_no_io_and_postcleanup_dispatch_is_once(self):
+        error, _ = self.runtime_failure(); diag = post_diagnostic()
+        diag.stage_at('post_start_health'); records = []
+        with mock.patch.object(diag, 'details', side_effect=AssertionError('pre-fence IO')):
+            diag.capture_first(error)
+            diag.capture_first(NoString(CANARY))
+        done = threading.Event()
+        def save(text):
+            records.append(text); done.set()
+        with mock.patch.object(diag, 'persist', side_effect=save):
+            diag.emit_after_cleanup(io.StringIO())
+            diag.emit_after_cleanup(io.StringIO())
+            self.assertTrue(done.wait(5))
+        self.assertEqual(len(records), 1)
+        self.assertEqual(json.loads(records[0])['reason_code'], 'POST_START_RUNTIME_HEALTH_FAILED')
 
 
 if __name__ == '__main__':
