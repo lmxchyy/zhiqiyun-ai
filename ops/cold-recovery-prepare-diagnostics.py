@@ -242,6 +242,10 @@ class PostStartDiagnostic(Diagnostic):
                     actual['asyncMessaging'] = value if value in ('READY', 'STARTING', 'DEGRADED', 'DISABLED') else 'UNRECOGNIZED'
         if label == 'API/worker runtime unhealthy':
             expected.update(state='true', healthy='healthy')
+        elif label == 'worker startup health deadline exceeded':
+            expected.update(state='true', healthy='healthy', starting_wait_seconds=60,
+                            wait_budget_exhausted=False)
+            actual['wait_budget_exhausted'] = True
         elif label == 'scheduler async runtime is not READY':
             expected.update(ready=True, asyncMessaging='READY')
         elif label == 'post-start protected drift':
@@ -251,6 +255,7 @@ class PostStartDiagnostic(Diagnostic):
         if label is not None:
             result['reason_code'] = {
                 'API/worker runtime unhealthy': 'POST_START_RUNTIME_HEALTH_FAILED',
+                'worker startup health deadline exceeded': 'POST_START_WORKER_HEALTH_TIMEOUT',
                 'scheduler async runtime is not READY': 'POST_START_READY_FAILED',
                 'post-start protected drift': 'POST_START_PROTECTED_SNAPSHOT_MISMATCH',
                 'actual PID1 environment policy mismatch': 'POST_START_PID1_ENV_POLICY_MISMATCH',

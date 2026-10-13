@@ -865,5 +865,105 @@ class PostStartDiagnosticsTests(unittest.TestCase):
         self.assertEqual(json.loads(records[0])['reason_code'], 'POST_START_RUNTIME_HEALTH_FAILED')
 
 
+class WorkerStartingWaitTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = 0.0; self.calls = []; self.sleeps = []
+        self.health = ['starting']; self.states = ['true']; self.advance_state = 0
+        self.backend = object.__new__(r.Backend)
+        self.backend.anchor = {'services': {'smartvideo-worker': {'cid': 'worker-cid'}}}
+        self.backend.docker = types.SimpleNamespace(text=self.text)
+        self.query = ['docker', 'inspect', '--format', '{{.State.Health.Status}}', 'worker-cid']
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(r.time, 'monotonic', side_effect=lambda: self.clock).start()
+        mock.patch.object(r.time, 'sleep', side_effect=self.sleep).start()
+
+    def sleep(self, seconds):
+        self.assertGreater(seconds, 0); self.assertLessEqual(seconds, 2)
+        self.sleeps.append(seconds); self.clock += seconds
+
+    def text(self, args, **kwargs):
+        self.calls.append((args, kwargs))
+        if 'timeout' in kwargs:
+            self.assertGreater(kwargs['timeout'], 0); self.assertLessEqual(kwargs['timeout'], 5)
+        if args == self.query[1:]:
+            return self.health.pop(0) if len(self.health) > 1 else self.health[0]
+        if args == ['inspect', '--format', '{{.State.Running}}', 'worker-cid']:
+            self.clock += self.advance_state
+            return self.states.pop(0) if len(self.states) > 1 else self.states[0]
+        return 'delegated-observation'
+
+    def observe(self):return self.backend.recovery_runtime_observation(self.query)
+
+    def test_healthy_has_original_single_observation_no_wait(self):
+        self.health = ['healthy']; self.assertEqual(self.observe(), 'healthy')
+        self.assertEqual(len(self.calls), 1); self.assertEqual(self.sleeps, [])
+
+    def test_initial_unhealthy_or_unknown_never_retried(self):
+        for value in ('unhealthy', '', 'UNRECOGNIZED'):
+            self.health = [value]; self.assertEqual(self.observe(), value)
+        self.assertEqual(len(self.calls), 3); self.assertEqual(self.sleeps, [])
+
+    def test_starting_converges_healthy_on_same_pinned_cid(self):
+        self.health = ['starting', 'starting', 'healthy']
+        self.assertEqual(self.observe(), 'healthy'); self.assertEqual(self.sleeps, [2, 2])
+        self.assertEqual(len(self.calls), 6)
+        self.assertTrue(all(args[-1] == 'worker-cid' for args, _ in self.calls))
+
+    def test_transition_unhealthy_fails_without_another_sleep_or_query(self):
+        self.health = ['starting', 'unhealthy']; self.assertEqual(self.observe(), 'unhealthy')
+        self.assertEqual(self.sleeps, [2]); self.assertEqual(len(self.calls), 3)
+
+    def test_initial_stopped_worker_immediately_refuses(self):
+        self.states = ['false']
+        with self.assertRaises(r.GateError):self.observe()
+        self.assertEqual(self.sleeps, []); self.assertEqual(len(self.calls), 2)
+
+    def test_worker_stops_as_health_converges_still_refuses(self):
+        self.health = ['starting', 'healthy']; self.states = ['true', 'false']
+        with self.assertRaises(r.GateError):self.observe()
+        self.assertEqual(self.sleeps, [2]); self.assertEqual(len(self.calls), 4)
+
+    def test_timeout_starting_has_unique_expected_actual_and_no_nonpositive_rpc(self):
+        try:self.observe()
+        except r.GateError as error:
+            diag = post_diagnostic(); diag.stage_at('post_start_health'); data = diag.details(error)
+        self.assertEqual(self.clock, 60); self.assertEqual(sum(self.sleeps), 60)
+        self.assertEqual(data['reason_code'], 'POST_START_WORKER_HEALTH_TIMEOUT')
+        self.assertEqual(data['expected']['healthy'], 'healthy')
+        self.assertEqual(data['expected']['starting_wait_seconds'], 60)
+        self.assertEqual(data['actual']['healthy'], 'starting')
+        self.assertTrue(data['actual']['wait_budget_exhausted'])
+        self.assertEqual(data['actual']['service'], 'smartvideo-worker')
+        self.assertEqual(data['function'], 'recovery_runtime_observation')
+
+    def test_observation_consumes_remaining_budget_no_success_after_deadline(self):
+        self.health = ['starting', 'healthy']; self.advance_state = 60
+        with self.assertRaises(r.GateError):self.observe()
+        self.assertEqual(self.clock, 60); self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.sleeps, [])
+
+    def test_api_readiness_broker_barrier_other_cids_are_delegated_unchanged(self):
+        for args in (self.query[:-1] + ['api-cid'], self.query[:-1] + ['replacement-cid'],
+                     ['docker', 'compose', 'exec', 'api', 'curl', '/ready'],
+                     ['docker', 'compose', 'exec', 'postgres', 'sh', '-c', 'barrier'],
+                     ['docker', 'compose', 'exec', 'api', 'python3', '-c', 'broker']):
+            self.assertEqual(self.backend.recovery_runtime_observation(args), 'delegated-observation')
+            self.assertEqual(self.calls[-1], (args[1:], {}))
+        self.assertEqual(self.sleeps, [])
+
+    def test_actual_backend_healthy_wires_wait_without_changing_other_gate_order(self):
+        self.health = ['starting', 'healthy']; events = []
+        def verify(phase, compose, env, execute):
+            events.append('runtime')
+            self.assertEqual(phase, 'post'); self.assertEqual(execute(self.query), 'healthy')
+        with mock.patch.object(r.cap, 'rendered_policy', return_value=({}, {})), \
+             mock.patch.object(r.cap, 'verify_running', side_effect=lambda *args: events.append('pid1-policy')), \
+             mock.patch.object(r.runtime, 'verify', side_effect=verify), \
+             mock.patch.object(r.cold, 'read_health', side_effect=lambda *args: events.append('api-health') or {'status': 'ok'}):
+            self.backend.healthy({})
+        self.assertEqual(events, ['pid1-policy', 'runtime', 'api-health'])
+        self.assertEqual(self.sleeps, [2])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

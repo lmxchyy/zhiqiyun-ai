@@ -222,3 +222,22 @@ certification. This addition cannot retrospectively recover a dead process's
 missing failure trace and cannot make an expired/spent or old-controller-bound
 candidate executable. New source-bound authority is still required for a later
 production recovery; no new candidate or production START is implied by Review.
+
+### Worker startup health convergence (cold recovery only)
+
+The existing pinned Worker Docker-health observation may retry only `starting`,
+for at most60s on a monotonic clock with 2s pauses. Retry reads retain the exact
+anchored CID, recheck Running and cap each RPC to5s or the remaining budget.
+Stopped Worker, observation error, unhealthy/unknown state or exhausted budget
+fails closed; final healthy after the deadline is not accepted. Initially healthy
+or unhealthy has no added wait. The shared ordinary-release runtime verifier,
+API readiness, metrics, messaging READY, broker/barrier and all post-start
+policy/snapshot/authority/commit checks remain unchanged. The supervisor and
+original human/candidate deadlines are not extended by this wait.
+
+The measured failed attempt had first successful Worker health probe at10.047s
+and further successes at20/30/40s before its40.874s fence completion. That total
+uptime is not the controller's waiting time: its former health guard took one
+sample without retry. Retained historical successes support convergence near10s,
+not a statistical normal-start baseline. Native timeout diagnostics retain the
+first check as `POST_START_WORKER_HEALTH_TIMEOUT`; this is not production success.

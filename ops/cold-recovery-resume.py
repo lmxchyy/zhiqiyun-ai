@@ -59,6 +59,7 @@ cold = load('resume_cold', 'first-upgrade-cold.py')
 cap = cold.capability
 transport = load('resume_transport', 'quarantine-psql-transport.py')
 runtime = load('resume_runtime', 'verify-release-runtime.py')
+GateError = runtime.GateError
 Refused = cap.Refused
 prepare_diagnostics = load('resume_prepare_diagnostics', 'cold-recovery-prepare-diagnostics.py')
 _prepare_diagnostic = None
@@ -428,11 +429,48 @@ class Backend:
         require(cap.verify(evidence, REF, APP, snapshot['policy']) == IMAGE, 'target certification mismatch')
         require(cap.verify_history(evidence, APP), 'full history certification required')
 
+    def recovery_runtime_observation(self, args):
+        # Ordinary release runtime is unchanged. Only this pinned Worker's
+        # health observation may converge from starting during cold recovery.
+        service = 'smartvideo-worker'
+        cid = self.anchor['services'][service]['cid']
+        health_args = ['docker', 'inspect', '--format', '{{.State.Health.Status}}', cid]
+        if args != health_args:
+            return self.docker.text(args[1:])
+        healthy = self.docker.text(args[1:])
+        if healthy != 'starting':
+            return healthy  # Existing runtime gate rejects unhealthy/unknown.
+        deadline = time.monotonic() + 60
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise GateError('worker startup health deadline exceeded')
+            state = self.docker.text(['inspect', '--format', '{{.State.Running}}', cid],
+                                     timeout=min(5, remaining))
+            if state != 'true':
+                raise GateError('API/worker runtime unhealthy')
+            if time.monotonic() >= deadline:
+                raise GateError('worker startup health deadline exceeded')
+            if healthy != 'starting':
+                return healthy
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise GateError('worker startup health deadline exceeded')
+            time.sleep(min(2, remaining))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise GateError('worker startup health deadline exceeded')
+            healthy = self.docker.text(args[1:], timeout=min(5, remaining))
+            if time.monotonic() >= deadline:
+                raise GateError('worker startup health deadline exceeded')
+            if healthy != 'starting' and healthy != 'healthy':
+                return healthy  # No sleep/retry after unhealthy or unknown.
+
     def healthy(self, evidence):
         model, policy = cap.rendered_policy(self.docker, COMPOSE, ENV, REF)
         model['_compose_file'], model['_env_file'] = COMPOSE, ENV
         cap.verify_running(self.docker, model, evidence, REF)
-        runtime.verify('post', COMPOSE, ENV, execute=lambda args: self.docker.text(args[1:]))
+        runtime.verify('post', COMPOSE, ENV, execute=self.recovery_runtime_observation)
         base = ['compose', '-f', COMPOSE, '--env-file', ENV]
         require(cold.read_health(self.docker, base, 'health').get('status') == 'ok', 'API health failed')
 
