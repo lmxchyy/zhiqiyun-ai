@@ -215,12 +215,17 @@ type issue190Fixture struct {
 
 func issue190Setup(t *testing.T, db *sql.DB, mode string, blocking bool) *issue190Fixture {
 	t.Helper()
+	return issue190SetupAtPrice(t, db, mode, blocking, 1)
+}
+
+func issue190SetupAtPrice(t *testing.T, db *sql.DB, mode string, blocking bool, points int) *issue190Fixture {
+	t.Helper()
 	store := fencingStore(db)
 	userID, _ := setupPaidTestUser(t, db, "issue190", 1000)
 	p, channelID := issue190ProviderFixture(t, db, userID, blocking)
 	planID := "plan_" + userID
 	// Real isolated pricing, even when migrations publish only paid models.
-	if _, err := db.Exec(`INSERT INTO xz_billing_rule_versions(id,rule_key,model_name,model_code,module_code,billing_unit,base_price_points,version,status) VALUES($1,$1,'gpt-image-2','gpt-image-2',$2,'PER_IMAGE',1,1,'PUBLISHED')`, planID, moduleImageGeneration); err != nil {
+	if _, err := db.Exec(`INSERT INTO xz_billing_rule_versions(id,rule_key,model_name,model_code,module_code,billing_unit,base_price_points,version,status) VALUES($1,$1,'gpt-image-2','gpt-image-2',$2,'PER_IMAGE',$3,1,'PUBLISHED')`, planID, moduleImageGeneration, points); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM xz_billing_rule_versions WHERE id=$1`, planID) })
