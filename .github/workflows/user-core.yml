@@ -283,6 +283,15 @@ jobs:
             docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d "$database" -v ON_ERROR_STOP=1 < database/migrations/115-generation-artifact-identity.sql
           done
 
+      - name: Test async normal image worker storage and settlement (no SKIP)
+        working-directory: backend-go
+        env:
+          ISSUE190_REQUIRE_POSTGRES: "1"
+        run: |
+          set -euo pipefail
+          go test -race -count=1 -timeout 2m -json ./internal/httpserver -run '^(TestGenerationImageWorkerStorageConstructor|TestIssue190PostgresImageWorkerStorage)$' | tee image-worker-storage.json
+          python3 -c 'import json,sys; e=[json.loads(s) for s in open(sys.argv[1])]; required={"TestGenerationImageWorkerStorageConstructor","TestIssue190PostgresImageWorkerStorage"}; assert required <= {x.get("Test") for x in e if x.get("Action")=="pass"}; assert not any(x.get("Action")=="skip" for x in e)' image-worker-storage.json
+
       - name: Test #207 fixed psql transport against CI-owned network-none PostgreSQL
         run: python3 tests/issue207-psql-transport-test.py
 

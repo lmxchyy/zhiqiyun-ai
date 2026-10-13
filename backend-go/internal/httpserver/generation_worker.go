@@ -13,6 +13,7 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/messaging"
 	pe "xianzhi-ai/backend-go/internal/providerexecution"
+	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
 const generationImageCanaryConsumer = "generation-image-canary-worker"
@@ -33,6 +34,15 @@ func RunGenerationImageCanaryWorker(ctx context.Context, cfg config.Config, db *
 func RunGenerationImageNormalWorker(ctx context.Context, cfg config.Config, db *sql.DB, manager *messaging.ConnectionManager) error {
 	return runGenerationImageWorker(ctx, cfg, db, manager, imageDispatchNormal)
 }
+
+// newGenerationImageWorkerAPI supplies the same private-storage dependencies
+// as the HTTP API. The async consumer owns a separate api instance.
+func newGenerationImageWorkerAPI(db *sql.DB, cfg config.Config) api {
+	store := newPostgresPrimaryStore(db, cfg.DataPath)
+	fileService := storagecenter.NewService(storagecenter.NewPostgresRepository(db), storagecenter.S3ProviderFactory{AutoCreateBucket: cfg.StorageAutoCreateBucket}, fileCenterOptions(cfg))
+	return newAPI(store, cfg, nil, fileService)
+}
+
 func runGenerationImageWorker(ctx context.Context, cfg config.Config, db *sql.DB, manager *messaging.ConnectionManager, mode string) error {
 	if db == nil || manager == nil {
 		return fmt.Errorf("generation worker dependencies are required")
@@ -40,8 +50,7 @@ func runGenerationImageWorker(ctx context.Context, cfg config.Config, db *sql.DB
 	if !generationCanaryDrainEnabled(cfg) {
 		return fmt.Errorf("ASYNC_MESSAGING_ENABLED and PROVIDER_EXECUTION_SAFETY_ENABLED must be true")
 	}
-	store := newPostgresPrimaryStore(db, cfg.DataPath)
-	a := newAPI(store, cfg, nil, nil)
+	a := newGenerationImageWorkerAPI(db, cfg)
 	inbox := messaging.NewInboxStore(db)
 	queue, retryKey := messaging.GenerationCanaryQueue, messaging.GenerationCanaryRetryKey
 	if mode == imageDispatchNormal {
