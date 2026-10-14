@@ -1,0 +1,21 @@
+{
+  "built_at": "2026-10-13T15:16:58Z",
+  "digest": "sha256:bc6da7a08a53907f7f4c3d302d616012a718163c42e136cd34c70feca6226cbd",
+  "git_sha": "071ccc00136459b612c2c274be6f65bfdc72b76d",
+  "image": "ghcr.io/lmxchyy/zhiqiyun-ai",
+  "image_reference": "ghcr.io/lmxchyy/zhiqiyun-ai@sha256:bc6da7a08a53907f7f4c3d302d616012a718163c42e136cd34c70feca6226cbd",
+  "preferred_registry": "aliyun_acr",
+  "production_contract": "passed",
+  "registries": {
+    "aliyun_acr": {
+      "digest": "sha256:bc6da7a08a53907f7f4c3d302d616012a718163c42e136cd34c70feca6226cbd",
+      "image": "crpi-kvtl7houjvj5ftba.cn-hangzhou.personal.cr.aliyuncs.com/zhiqiyun-ai/zhiqiyun-ai",
+      "image_reference": "crpi-kvtl7houjvj5ftba.cn-hangzhou.personal.cr.aliyuncs.com/zhiqiyun-ai/zhiqiyun-ai@sha256:bc6da7a08a53907f7f4c3d302d616012a718163c42e136cd34c70feca6226cbd"
+    },
+    "ghcr": {
+      "digest": "sha256:bc6da7a08a53907f7f4c3d302d616012a718163c42e136cd34c70feca6226cbd",
+      "image": "ghcr.io/lmxchyy/zhiqiyun-ai",
+      "image_reference": "ghcr.io/lmxchyy/zhiqiyun-ai@sha256:bc6da7a08a53907f7f4c3d302d616012a718163c42e136cd34c70feca6226cbd"
+    }
+  }
+}
