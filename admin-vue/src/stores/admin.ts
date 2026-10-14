@@ -75,6 +75,7 @@ export const adminModules: AdminModule[] = [
   { id: "userUsage", title: "使用记录", endpoint: "/user/usage", surface: "user", path: "/app/usage" },
   { id: "userMembership", title: "身份/充值/订阅", endpoint: "/member/wallet", surface: "user", path: "/app/membership" },
   { id: "userOrders", title: "订单明细", endpoint: "/member/wallet", surface: "user", path: "/app/orders" },
+  { id: "userModels", title: "模型列表", endpoint: "", surface: "user", path: "/app/models" },
   { id: "partnerDashboard", title: "代理商看板", endpoint: "/channel/me", surface: "agent", path: "/app/agent" },
   { id: "partnerCustomers", title: "客户管理", endpoint: "/channel/customers", surface: "agent", path: "/app/agent/customers" },
   { id: "partnerOrders", title: "订单管理", endpoint: "/channel/orders", surface: "agent", path: "/app/agent/orders" },
@@ -264,11 +265,11 @@ export const useAdminStore = defineStore("admin", {
         }
       }
     },
-    async mutate(method: "POST" | "PATCH", url: string, data: AdminRecord = {}) {
+    async mutate(method: "POST" | "PATCH" | "PUT" | "DELETE", url: string, data: AdminRecord = {}) {
       this.saving = true;
       this.error = "";
       try {
-        await adminRequest<AdminRecord>({ method, url, data });
+        await adminRequest<AdminRecord>({ method, url, ...(method === "DELETE" ? {} : { data }) });
         this.dataByModule = {};
         this.dataByEndpoint = {};
         await this.loadActiveModule({ preferCache: false });

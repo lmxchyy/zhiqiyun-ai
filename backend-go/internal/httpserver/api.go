@@ -101,6 +101,7 @@ type platformStore interface {
 	UpdateAdminAIModule(string, adminAIModuleMutation) (adminAIModule, error)
 	CreateAdminAIModel(adminAIModelMutation) (adminAIModel, error)
 	UpdateAdminAIModel(string, adminAIModelMutation) (adminAIModel, error)
+	DeleteAdminAIModel(string) error
 	UpdateAdminAIParameterSchema(string, adminAIParameterSchemaMutation) (adminAIParameterSchema, error)
 	UpdateAdminTenantModuleLimit(string, adminTenantModuleLimitMutation) (adminTenantModuleLimit, error)
 	UpdateAdminPlanCapabilities(string, adminPlanCapabilitiesMutation) error

@@ -3083,6 +3083,22 @@ func (s *jsonStore) UpdateAdminAIModel(id string, req adminAIModelMutation) (adm
 	return updated, err
 }
 
+func (s *jsonStore) DeleteAdminAIModel(id string) error {
+	return s.updateAdmin(func(data *adminPlatformData) error {
+		*data = normalizeAICapabilityDefaults(*data)
+		for i := range data.AIModels {
+			if data.AIModels[i].ID != id {
+				continue
+			}
+			removed := data.AIModels[i]
+			data.AIModels = append(data.AIModels[:i], data.AIModels[i+1:]...)
+			unbindAIModelFromModule(data, removed.ModuleCode, removed.ModelName)
+			return nil
+		}
+		return fmt.Errorf("ai model not found: %s", id)
+	})
+}
+
 func (s *jsonStore) UpdateAdminAIParameterSchema(id string, req adminAIParameterSchemaMutation) (adminAIParameterSchema, error) {
 	var updated adminAIParameterSchema
 	err := s.updateAdmin(func(data *adminPlatformData) error {

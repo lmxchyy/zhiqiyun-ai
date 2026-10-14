@@ -1655,6 +1655,7 @@
               <el-empty v-else description="暂无订单明细记录" />
             </section>
           </section>
+          <UserModelsPanel v-else-if="store.activeModuleId === 'userModels'" />
           <PricePlanGovernance
             v-else-if="store.activeModuleId === 'pricePlanGovernance'"
             :current-role="String(currentAdmin?.role || '')"
@@ -2412,6 +2413,7 @@ import AdminWorkspaceOverview from "./components/workspace/AdminWorkspaceOvervie
 import UserHomeWorkspace from "./components/workspace/UserHomeWorkspace.vue";
 import UserAgentWorkspace from "./components/workspace/UserAgentWorkspace.vue";
 import AdminAuthenticatedShell from "./components/workspace/AdminAuthenticatedShell.vue";
+import UserModelsPanel from "./components/workspace/UserModelsPanel.vue";
 import {
   adminModuleById,
   adminNavigationGroups,
@@ -3456,7 +3458,7 @@ const userModuleGroups = [
   { id: "userCreation", title: "创作中心", icon: Collection, items: modules.filter((item) => ["userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userSmartVideo", "userWorks"].includes(item.id)) },
   { id: "userOperationCenter", title: "运营中心", icon: Connection, items: modules.filter((item) => operationCenterModuleIds.includes(item.id)) },
   { id: "userBilling", title: "身份/充值/订阅", icon: Wallet, items: modules.filter((item) => ["userMembership"].includes(item.id)) },
-  { id: "userData", title: "数据记录", icon: DataAnalysis, items: modules.filter((item) => ["userUsage", "userOrders"].includes(item.id)) }
+  { id: "userData", title: "数据记录", icon: DataAnalysis, items: modules.filter((item) => ["userUsage", "userOrders", "userModels"].includes(item.id)) }
 ];
 
 const userFlatMenuDefs = [
@@ -3468,6 +3470,7 @@ const userFlatMenuDefs = [
   { id: "userSmartVideo", targetId: "userSmartVideo", title: "AI 自动混剪", icon: Film },
   { id: "userAgentCenter", targetId: "userAgentCenter", title: "智能体中心", icon: Cpu },
   { id: "userWorks", targetId: "userWorks", title: "作品中心", icon: Collection },
+  { id: "userModels", targetId: "userModels", title: "模型列表", icon: Connection },
   { id: "userMembership", targetId: "userMembership", title: "身份充值订阅", icon: Tickets },
   { id: "userUsage", targetId: "userUsage", title: "使用记录", icon: DataAnalysis },
   { id: "userOrders", targetId: "userOrders", title: "订单明细", icon: Document }
@@ -3514,6 +3517,7 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   userUsage: { badge: "使用记录", description: "按任务、模型、扣点和余额变化查看正式使用流水，和主控计费口径保持一致。" },
   userMembership: { badge: "身份/充值/订阅", description: "先开通会员、代理商或运营中心身份，再完成点数充值、套餐订阅和支付方式选择。" },
   userOrders: { badge: "交易记录", description: "查看历史订单、支付状态和点数到账结果；充值/订阅入口已拆分为独立模块。" },
+  userModels: { badge: "模型列表", description: "汇总平台当前可调用的全部模型，支持新增、编辑、启停与删除。" },
   knowledgeAdmin: { badge: "知识库治理", description: "跨租户管理知识库、文档解析、Chunk、Embedding、向量索引、检索日志与问答统计。" },
   mediaAssets: { badge: "素材中心", description: "统一上传、分类、预览、启停并追踪运营素材的页面引用。" },
   inspirationManagement: { badge: "内容运营", description: "管理创作案例、提示词、模型参数、审核发布和同款转化数据。" },
