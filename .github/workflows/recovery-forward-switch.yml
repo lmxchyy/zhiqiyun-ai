@@ -1,0 +1,170 @@
+name: recovery-forward-switch
+
+on:
+  pull_request:
+    paths:
+      - 'ops/recovery-forward-switch.py'
+      - 'ops/forward-switch-manifest.json'
+      - 'ops/cold-recovery-resume.py'
+      - 'ops/verify-image-quarantine-capability.py'
+      - 'ops/quarantine-psql-transport.py'
+      - 'ops/verify-release-runtime.py'
+      - 'tests/recovery-forward-switch*'
+      - 'docs/recovery-forward-switch.md'
+      - '.github/workflows/recovery-forward-switch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  pure-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: |
+          python3 -B tests/recovery-forward-switch-test.py
+          python3 -B tests/cold-recovery-resume-diagnostics-test.py
+          python3 -B tests/cold-recovery-resume-test.py
+          python3 -B tests/first-upgrade-cold-test.py
+
+  exact-carrier-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [success, parent-kill, parent-term, partial-create, response-loss, broker]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Acquire only official old/new digests, never build an application
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+          docker --host unix:///var/run/docker.sock pull --platform linux/amd64 ghcr.io/lmxchyy/zhiqiyun-ai@sha256:6ca5046ac2bd53b4ee7e5b96bab5bb04cd8d308d8a292d4fd2004bc75609390b
+          test "$(docker image inspect --format '{{.Id}}' ghcr.io/lmxchyy/zhiqiyun-ai@sha256:6ca5046ac2bd53b4ee7e5b96bab5bb04cd8d308d8a292d4fd2004bc75609390b)" = sha256:3955f86a32d12e68e478c70536607455546885fa07f730a6f5c9089cd0fbf2da
+          docker --host unix:///var/run/docker.sock pull --platform linux/amd64 ghcr.io/lmxchyy/zhiqiyun-ai@sha256:bc6da7a08a53907f7f4c3d302d616012a718163c42e136cd34c70feca6226cbd
+      - name: Private UUID-owned local checkout and runner manifests before provisioning
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
+          root="/opt/forward-owned-$owner"
+          # A real local Git clone, not a Windows .git-file mount and not a source
+          # rebuild. Root ancestry is needed by private/nofollow signing fixtures.
+          sudo mkdir -m 700 "$root"
+          sudo git clone --no-hardlinks "$PWD" "$root/source"
+          test "$(sudo git -C "$root/source" rev-parse HEAD)" = "$(git rev-parse HEAD)"
+          test -z "$(sudo git -C "$root/source" status --porcelain)"
+          sudo git -C "$root/source" cat-file -e 071ccc00136459b612c2c274be6f65bfdc72b76d^{commit}
+          sudo git -C "$root/source" cat-file -e b749a9ad1e543ac2f0b272aaac1db9b56065c85b^{commit}
+          sudo mkdir -m 700 -p "$root/source/.evidence/forward-switch"
+          sudo python3 - "$root" "$owner" <<'PY'
+          import json,os,sys
+          root,owner=sys.argv[1:]
+          path=root+'/source/.evidence/forward-switch/runner.json'
+          fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+          with os.fdopen(fd,'w') as stream:
+              json.dump(dict(owner=owner,name='forward-ci-'+owner,tag='forward-ci-tooling:'+owner,resources=[]),stream)
+              stream.flush();os.fsync(stream.fileno())
+          PY
+          echo "FIXTURE_ROOT=$root" >> "$GITHUB_ENV"
+          echo "RUNNER_OWNER=$owner" >> "$GITHUB_ENV"
+      - name: Existing tooling only, no controller business image build
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull pgvector/pgvector:pg16
+          docker pull postgres:16-alpine
+          docker pull redis:7-alpine
+          docker pull rabbitmq:3-management-alpine
+          docker pull --platform linux/amd64 docker.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          # Public probes returned401; availability remains an actual CI gate.
+          minio='docker.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e'
+          docker image inspect "$minio" | python3 -c 'import json,sys; o=json.load(sys.stdin)[0]; assert {sys.argv[1],sys.argv[1][len("docker.io/"):]} & set(o.get("RepoDigests",[])) and (o["Os"],o["Architecture"]) == ("linux","amd64")' "$minio"
+          docker pull alpine:3.20
+          docker pull python:3.6-alpine
+          docker pull python:3.6.8-alpine
+          docker build --label "org.xianzhi.forward-ci=$RUNNER_OWNER" -f tests/issue203-safe-drain-transport.Dockerfile -t "forward-ci-tooling:$RUNNER_OWNER" .
+      - name: Actual Python3.6.8, full NEW packaged history and real Backend/PG/Rabbit (host900, zero skips)
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$FIXTURE_ROOT/source"
+          cid="$(docker create --pull never --name "forward-ci-$RUNNER_OWNER" --label "org.xianzhi.forward-ci=$RUNNER_OWNER" \
+            -v "$root:$root" -v /var/run/docker.sock:/var/run/docker.sock -w "$root" "forward-ci-tooling:$RUNNER_OWNER" \
+            sh -ec 'python3.6 -B tests/recovery-forward-switch-test.py; python3.6 -B tests/cold-recovery-resume-diagnostics-test.py; python3.6 -B tests/cold-recovery-resume-test.py; python3.6 -B tests/first-upgrade-cold-test.py; python3.6 -B tests/recovery-forward-switch-backend-test.py "$1"' sh '${{ matrix.case }}')"
+          image="$(docker image inspect --format '{{.Id}}' "forward-ci-tooling:$RUNNER_OWNER")"
+          sudo python3 - "$root/.evidence/forward-switch/runner.json" "$cid" "$image" <<'PY'
+          import json,os,sys
+          path,cid,image=sys.argv[1:]
+          with open(path) as stream: data=json.load(stream)
+          data['resources']=[['image',image],['container',cid]]
+          fd=os.open(path,os.O_WRONLY|os.O_TRUNC|os.O_NOFOLLOW)
+          with os.fdopen(fd,'w') as stream:
+              json.dump(data,stream);stream.flush();os.fsync(stream.fileno())
+          PY
+          timeout 900 docker start -a "$cid" 2>&1 | sudo tee "$root/.evidence/forward-switch/native.log"
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$cid")" = 0
+      - name: Exact owned runner and fixture EXIT cleanup, never down/prune
+        if: always() && env.FIXTURE_ROOT != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Capture exact IDs by UUID-owned planned name/tag even if provisioning
+          # failed before the normal full-ID receipt. Recheck labels before rm.
+          name="forward-ci-$RUNNER_OWNER"
+          if docker container inspect "$name" >/dev/null 2>&1; then
+            test "$(docker inspect --format '{{index .Config.Labels "org.xianzhi.forward-ci"}}' "$name")" = "$RUNNER_OWNER"
+            cid="$(docker inspect --format '{{.Id}}' "$name")"
+            docker rm -f "$cid"
+          fi
+          sudo python3 -B "$FIXTURE_ROOT/source/tests/recovery-forward-switch-cleanup.py"
+      - name: Independent private sanitization, even after Docker failure
+        id: sanitize
+        if: always() && env.FIXTURE_ROOT != ''
+        run: sudo python3 -B "$FIXTURE_ROOT/source/tests/recovery-forward-switch-cleanup.py" --sanitize-only
+      - name: Export allowlisted sanitized receipts without opening the private root
+        id: export
+        if: always() && steps.sanitize.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d "$RUNNER_TEMP/fixed-forward-$RUNNER_OWNER-XXXXXXXX")"
+          # The runner owns this0700 directory; sudo writes only readable receipts.
+          # Private checkout/config/key ancestors stay root-owned0700/0600.
+          sudo python3 -B "$FIXTURE_ROOT/source/tests/recovery-forward-switch-cleanup.py" --export-sanitized "$stage"
+          test -r "$stage/fixture-sanitization.json"
+          echo "FORWARD_ARTIFACT_ROOT=$stage" >> "$GITHUB_ENV"
+      - name: Only sanitized bounded receipts, never fixture configs/keys/raw inspect
+        if: always() && steps.export.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixed-forward-${{ matrix.case }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.FORWARD_ARTIFACT_ROOT }}/
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Remove only UUID-owned tooling image tag
+        if: always() && env.RUNNER_OWNER != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="forward-ci-tooling:$RUNNER_OWNER"
+          if docker image inspect "$tag" >/dev/null 2>&1; then
+            test "$(docker image inspect --format '{{index .Config.Labels "org.xianzhi.forward-ci"}}' "$tag")" = "$RUNNER_OWNER"
+            docker image rm "$tag"
+          fi
