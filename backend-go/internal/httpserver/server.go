@@ -775,6 +775,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.PATCH("/ai/modules/:code", wrapF(admin.updateAIModule))
 	adminGroup.POST("/ai/models", wrapF(admin.createAIModel))
 	adminGroup.PATCH("/ai/models/:id", wrapF(admin.updateAIModel))
+	adminGroup.DELETE("/ai/models/:id", wrapF(admin.deleteAIModel))
 	adminGroup.PATCH("/ai/parameter-schemas/:id", wrapF(admin.updateAIParameterSchema))
 	adminGroup.PATCH("/ai/tenant-module-limits/:id", wrapF(admin.updateTenantModuleLimit))
 	adminGroup.GET("/usage", wrapF(admin.usage))

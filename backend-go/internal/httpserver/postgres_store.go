@@ -5144,6 +5144,21 @@ func (s *postgresStore) UpdateAdminAIModel(id string, req adminAIModelMutation) 
 	return updated, err
 }
 
+func (s *postgresStore) DeleteAdminAIModel(id string) error {
+	return s.updateAICapabilityAdminData(func(data *adminPlatformData) error {
+		for i := range data.AIModels {
+			if data.AIModels[i].ID != id {
+				continue
+			}
+			removed := data.AIModels[i]
+			data.AIModels = append(data.AIModels[:i], data.AIModels[i+1:]...)
+			unbindAIModelFromModule(data, removed.ModuleCode, removed.ModelName)
+			return nil
+		}
+		return fmt.Errorf("ai model not found: %s", id)
+	})
+}
+
 func (s *postgresStore) UpdateAdminAIParameterSchema(id string, req adminAIParameterSchemaMutation) (adminAIParameterSchema, error) {
 	var updated adminAIParameterSchema
 	err := s.updateAICapabilityAdminData(func(data *adminPlatformData) error {

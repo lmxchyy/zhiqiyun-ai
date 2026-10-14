@@ -965,6 +965,14 @@ func (a adminAPI) updateAIModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"item": item})
 }
 
+func (a adminAPI) deleteAIModel(w http.ResponseWriter, r *http.Request) {
+	if err := a.store.DeleteAdminAIModel(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a adminAPI) updateAIParameterSchema(w http.ResponseWriter, r *http.Request) {
 	var req adminAIParameterSchemaMutation
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -2000,6 +2008,34 @@ func bindAIModelToModule(data *adminPlatformData, moduleCode string, modelName s
 		}
 		data.AIModules[index].BoundModels = append(data.AIModules[index].BoundModels, modelName)
 		data.AIModules[index].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		return
+	}
+}
+
+func unbindAIModelFromModule(data *adminPlatformData, moduleCode string, modelName string) {
+	if data == nil {
+		return
+	}
+	moduleCode = canonicalModuleCode(moduleCode)
+	modelName = strings.TrimSpace(modelName)
+	if moduleCode == "" || modelName == "" {
+		return
+	}
+	for index := range data.AIModules {
+		if canonicalModuleCode(data.AIModules[index].ModuleCode) != moduleCode {
+			continue
+		}
+		kept := make([]string, 0, len(data.AIModules[index].BoundModels))
+		for _, existing := range data.AIModules[index].BoundModels {
+			if strings.EqualFold(strings.TrimSpace(existing), modelName) {
+				continue
+			}
+			kept = append(kept, existing)
+		}
+		if len(kept) != len(data.AIModules[index].BoundModels) {
+			data.AIModules[index].BoundModels = kept
+			data.AIModules[index].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
 		return
 	}
 }
